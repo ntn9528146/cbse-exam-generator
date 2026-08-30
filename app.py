@@ -248,9 +248,11 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper Function ----------------
+# ---------------- AI Helper Function (Active Models) ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
+    
+    # Strictly Active 2026 Models
     models_to_test = ["gemini-3.6-flash", "gemini-3-flash", "gemini-2.5-flash"]
     last_err = None
     
@@ -333,7 +335,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         {pyq_mandate}
 
                         CBSE BLUEPRINT: Sec A (21 Qs x 1M), Sec B (7 Qs x 2M), Sec C (4 Qs x 3M), Sec D (2 Case Studies x 4M), Sec E (3 Qs x 5M).
-                        Return ONLY valid JSON.
+                        Return ONLY valid JSON with no markdown formatting.
                         """
                     elif "402" in subject or "417" in subject:
                         prompt = f"""
@@ -343,7 +345,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         {pyq_mandate}
 
                         CBSE IT-402 BLUEPRINT: Section A Objective (24 Marks), Section B Subjective (26 Marks).
-                        Return ONLY valid JSON.
+                        Return ONLY valid JSON with no markdown formatting.
                         """
                     else:
                         prompt = f"""
@@ -351,7 +353,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         Generate CBSE paper for syllabus: "{syllabus}"
                         Total Marks: {total_target_marks}, Time: {time_allowed}, Standard: {paper_standard}
                         {pyq_mandate}
-                        Sections A to E CBSE SQP format. Return ONLY valid JSON.
+                        Sections A to E CBSE SQP format. Return ONLY valid JSON with no markdown formatting.
                         """
                     paper_data = run_gemini_json_prompt(api_key, prompt)
 
