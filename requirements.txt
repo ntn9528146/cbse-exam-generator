@@ -1,0 +1,6 @@
+streamlit
+psycopg2
+python-dotenv
+python-docx
+reportlab
+google-genai
