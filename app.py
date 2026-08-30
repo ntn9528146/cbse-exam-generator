@@ -251,7 +251,7 @@ st.markdown("---")
 # ---------------- AI Helper Function ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
-    models_to_test = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"]
+    models_to_test = ["gemini-3.6-flash", "gemini-3-flash", "gemini-2.5-flash"]
     last_err = None
     
     for m in models_to_test:
