@@ -3,18 +3,22 @@ import json
 import os
 import re
 from dotenv import load_dotenv
-from google import genai
+import google.generativeai as genai
 from docx_generator import generate_and_save_docx
 
 load_dotenv()
 
-st.set_page_config(page_title="CBSE & Junior Exam Paper Generator", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="CBSE AI Exam Paper Generator", page_icon="🎓", layout="wide")
 
 st.title("🎓 Examination Paper Generator (Session 2026-27)")
 st.caption("Jai Arihant International School | Automated CBSE (9-12) & Custom Junior (Upto 8th) Engine")
 
-# ---------------- API Key & Logo Configuration ----------------
-api_key = os.getenv("GEMINI_API_KEY")
+# ---------------- API Key Configuration ----------------
+api_key = None
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+elif os.getenv("GEMINI_API_KEY"):
+    api_key = os.getenv("GEMINI_API_KEY")
 
 with st.sidebar:
     st.header("🔑 Settings")
@@ -26,7 +30,6 @@ with st.sidebar:
     st.subheader("🏫 School Logo")
     uploaded_logo = st.file_uploader("Upload School Logo (PNG / JPG)", type=["png", "jpg", "jpeg"])
 
-# Auto-Logo detection logic
 logo_temp_path = None
 if uploaded_logo:
     with open("temp_logo.png", "wb") as f:
@@ -93,7 +96,7 @@ with col_sc1:
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    class_level = st.selectbox("Select Class", ALL_CLASSES, index=10)
+    class_level = st.selectbox("Select Class", ALL_CLASSES, index=11)
 
 is_junior_class = class_level in ["Nursery", "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8"]
 
@@ -116,7 +119,6 @@ with col3:
             ["PYQ (CBSE Board Previous Years Questions with Year Details)", "Standard CBSE (Medium)", "Basic / Easy", "Tough / Advanced"]
         )
 
-# Marks and Time calculation
 if is_junior_class:
     col_m1, col_m2 = st.columns(2)
     with col_m1:
@@ -124,7 +126,6 @@ if is_junior_class:
     with col_m2:
         time_allowed = st.selectbox("Time Allowed", ["1 Hour", "1.5 Hours", "2 Hours", "2.5 Hours"], index=2)
 else:
-    # Official CBSE Locked Marks for Senior Classes (9 to 12)
     if "065" in subject or "083" in subject:
         total_target_marks = 70
         time_allowed = "3 Hours"
@@ -163,7 +164,6 @@ junior_blueprint = {}
 if is_junior_class:
     st.write("👉 **Select Question Types & Customize (At least 2 questions will be assigned per selected type):**")
     
-    # Initialize session state for junior options
     for q_type in JUNIOR_Q_TYPES:
         if f"chk_{q_type}" not in st.session_state:
             st.session_state[f"chk_{q_type}"] = True
@@ -172,19 +172,16 @@ if is_junior_class:
         if f"c_{q_type}" not in st.session_state:
             st.session_state[f"c_{q_type}"] = 0
 
-    # Auto-Distribution Logic for Junior classes (At least 2 per active category)
     def auto_distribute_junior_marks(target_marks):
         selected_types = [t for t in JUNIOR_Q_TYPES if st.session_state.get(f"chk_{t}", False)]
         if not selected_types:
             return
         
-        # Reset counts
         for t in JUNIOR_Q_TYPES:
             st.session_state[f"c_{t}"] = 0
         
         remaining = target_marks
         
-        # Step 1: Guarantee at least 2 questions for each selected type
         for t in selected_types:
             m = st.session_state.get(f"m_{t}", DEFAULT_JUNIOR_MARKS[t])
             if remaining >= m * 2:
@@ -194,7 +191,6 @@ if is_junior_class:
                 st.session_state[f"c_{t}"] = 1
                 remaining -= m
 
-        # Step 2: Distribute leftover marks smoothly across selected types
         while remaining > 0:
             allocated = False
             for t in selected_types:
@@ -206,7 +202,6 @@ if is_junior_class:
             if not allocated:
                 break
 
-    # Blueprint Header
     cols_h = st.columns([1, 4, 2, 2, 2])
     cols_h[0].write("**Include**")
     cols_h[1].write("**Question Type**")
@@ -244,146 +239,34 @@ if is_junior_class:
         st.button("🪄 Auto-Distribute Marks (Min 2 Qs Per Type)", on_click=auto_distribute_junior_marks, args=(total_target_marks,))
 
 else:
-    # Senior CBSE Blueprint Preview (9 to 12)
     if "065" in subject or "083" in subject:
-        st.info(f"📋 **Official CBSE SQP Pattern (37 Questions):** Sec A (21 Qs × 1M), Sec B (7 Qs × 2M), Sec C (4 Qs × 3M), Sec D (2 Case Studies × 4M), Sec E (3 Qs × 5M).")
+        st.info("📋 **Official CBSE SQP Pattern (37 Questions):** Sec A (21 Qs × 1M), Sec B (7 Qs × 2M), Sec C (4 Qs × 3M), Sec D (2 Case Studies × 4M), Sec E (3 Qs × 5M).")
     elif "402" in subject or "417" in subject:
         st.info("📋 **Official CBSE Skill Blueprint (21 Questions):** Section A (Objective - 24 Marks) & Section B (Subjective - 26 Marks).")
     else:
-        st.info(f"📋 **Official CBSE SQP Structure:** Sections A to E with MCQs, Assertion-Reason, VSA, SA, LA & Case Studies.")
+        st.info("📋 **Official CBSE SQP Structure:** Sections A to E with MCQs, Assertion-Reason, VSA, SA, LA & Case Studies.")
 
 st.markdown("---")
 
-# ---------------- Senior & Junior AI Prompt Engines ----------------
-def generate_junior_paper(client, school_name, class_level, subject, total_marks, time_allowed, syllabus, blueprint_dict, paper_standard):
-    bp_lines = []
-    for q_type, cfg in blueprint_dict.items():
-        bp_lines.append(f"- Section '{q_type}': Exactly {cfg['count']} questions, each worth {cfg['marks']} marks.")
-    bp_text = "\n".join(bp_lines)
-
-    prompt = f"""
-    You are an expert school examination setter for {class_level}, Subject: {subject}.
-    Create a complete question paper based strictly on this syllabus:
-    "{syllabus}"
-
-    Difficulty Standard: {paper_standard}
-    Total Marks: {total_marks} | Time: {time_allowed}
-
-    Required Sections & Questions:
-    {bp_text}
-
-    Strict Rules:
-    - Every single question must be 100% unique and distinct.
-    - If MCQ: Provide exactly 4 options labeled a, b, c, d.
-    - If Fill in the blanks: Include '________'.
-    - If Match the Following: Provide two matching columns (Column A and Column B).
-    - If Picture/Passage: Provide a descriptive scenario/short passage followed by questions.
-    - Language and difficulty must be appropriate for {class_level} students.
-
-    Return ONLY a valid JSON object matching this schema with NO markdown backticks:
-    {{
-      "general_instructions": [
-        "1. All questions are compulsory.",
-        "2. Read each question carefully before attempting.",
-        "3. Write answers neatly and legibly."
-      ],
-      "sections": [
-        {{
-          "section_header": "SECTION NAME",
-          "guidelines": ["Marks details"],
-          "questions": [
-            {{
-              "q_no": "Q1.",
-              "question_text": "Question statement here...",
-              "marks_text": "[1 Mark]",
-              "options": {{"a": "Option 1", "b": "Option 2", "c": "Option 3", "d": "Option 4"}}
-            }}
-          ]
-        }}
-      ]
-    }}
-    """
-    model_list = ["gemini-3.6-flash", "gemini-3-flash", "gemini-2.5-flash"]
-    for m in model_list:
-        try:
-            resp = client.models.generate_content(model=m, contents=prompt)
-            raw = resp.text.strip()
-            raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
-            raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
-            raw = raw.strip("` \n\r")
-            data = json.loads(raw)
-            if "sections" in data:
-                return data
-        except Exception:
-            continue
-    raise Exception("Failed to generate junior paper. Please check API Key.")
-
-def generate_senior_cbse_paper(client, school_name, class_level, subject, total_marks, time_allowed, syllabus, paper_standard):
-    is_pyq = "PYQ" in paper_standard
-    pyq_mandate = "For every question and sub-question, provide the authentic CBSE Board source in 'pyq_tag' (e.g. 'CBSE 2024 Delhi Set-1', 'CBSE 2023 All India', 'CBSE 2022 Term-2')." if is_pyq else ""
+# ---------------- AI Helper Function ----------------
+def run_gemini_json_prompt(api_key_str, prompt_text):
+    genai.configure(api_key=api_key_str)
+    models_to_test = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"]
+    last_err = None
     
-    if "065" in subject or "083" in subject:
-        prompt = f"""
-        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
-        Generate the COMPLETE 37-Question CBSE Board Paper based strictly on this syllabus:
-        "{syllabus}"
-
-        Total Marks: 70 | Time: 3 Hours | Standard: {paper_standard}
-        {pyq_mandate}
-
-        STRICT CBSE OFFICIAL SQP BLUEPRINT FOR {subject}:
-        Total Questions: 37 (Q1 to Q37 across Sections A to E).
-        - SECTION A (Q1 to Q21): 21 Questions. Q1-Q19 MCQs; Q20-Q21 Assertion & Reasoning. [1 Mark each].
-        - SECTION B (Q22 to Q28): 7 Questions of 2 marks each (Python output/error finding). Internal choice 'OR' in 2 questions.
-        - SECTION C (Q29 to Q32): 4 Questions of 3 marks each (Python logic/SQL queries). Internal choice 'OR' in 1 question.
-        - SECTION D (Q33 to Q34): 2 Case Study / Application based questions of 4 marks each with sub-questions.
-        - SECTION E (Q35 to Q37): 3 Long Answer questions of 5 marks each (Complete Python programs/SQL schemas).
-
-        Return ONLY a valid JSON object matching the standard CBSE schema with NO markdown backticks.
-        """
-    elif "402" in subject or "417" in subject:
-        prompt = f"""
-        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
-        Generate the complete 21-Question examination paper based strictly on this syllabus:
-        "{syllabus}"
-
-        Total Marks: 50 | Time: 2 Hours | Standard: {paper_standard}
-        {pyq_mandate}
-
-        STRICT IT-402/AI-417 BLUEPRINT:
-        Total Questions: 21 (Q1 to Q21).
-        Section A: OBJECTIVE (24 Marks) -> Q1 (Employability 4/6), Q2-Q5 (Specific Skills 5/6 each).
-        Section B: SUBJECTIVE (26 Marks) -> Q6-Q10 (Employability 3/5 [2M]), Q11-Q16 (Specific Skills 4/6 [2M]), Q17-Q21 (Specific Skills 3/5 [4M]).
-        
-        Return ONLY a valid JSON object with NO markdown backticks.
-        """
-    else:
-        prompt = f"""
-        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
-        Generate a complete official CBSE question paper based strictly on this syllabus:
-        "{syllabus}"
-
-        Total Marks: {total_marks}, Time Allowed: {time_allowed}, Standard: {paper_standard}
-        {pyq_mandate}
-
-        STRICT CBSE 5-SECTION BLUEPRINT (Sections A to E, Assertion-Reason, VSA, SA, LA & Case Studies).
-        Return ONLY a valid JSON object with NO markdown backticks.
-        """
-
-    model_list = ["gemini-3.6-flash", "gemini-3-flash", "gemini-2.5-flash"]
-    for m in model_list:
+    for m in models_to_test:
         try:
-            resp = client.models.generate_content(model=m, contents=prompt)
-            raw = resp.text.strip()
+            model = genai.GenerativeModel(m)
+            response = model.generate_content(prompt_text)
+            raw = response.text.strip()
             raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
             raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
             raw = raw.strip("` \n\r")
-            data = json.loads(raw)
-            if "sections" in data:
-                return data
-        except Exception:
+            return json.loads(raw)
+        except Exception as err:
+            last_err = err
             continue
-    raise Exception("Failed to generate senior CBSE paper. Please check API Key.")
+    raise Exception(f"AI Generation Error: {str(last_err)}")
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
@@ -397,32 +280,80 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
         st.error(f"❌ Junior Blueprint Total ({current_calculated}) must match Target Total Marks ({total_target_marks}). Use Auto-Distribute button.")
     else:
         try:
-            client = genai.Client(api_key=api_key.strip())
-            
-            with st.spinner(f"🧠 Generating unique examination paper for {class_level} - {subject}..."):
+            with st.spinner(f"🧠 Generating examination paper for {class_level} - {subject}..."):
                 if is_junior_class:
-                    paper_data = generate_junior_paper(
-                        client=client,
-                        school_name=school_name,
-                        class_level=class_level,
-                        subject=subject,
-                        total_marks=total_target_marks,
-                        time_allowed=time_allowed,
-                        syllabus=syllabus,
-                        blueprint_dict=junior_blueprint,
-                        paper_standard=paper_standard
-                    )
+                    bp_lines = [f"- Section '{k}': Exactly {v['count']} questions ({v['marks']} Marks each)" for k, v in junior_blueprint.items()]
+                    bp_text = "\n".join(bp_lines)
+                    prompt = f"""
+                    You are an expert school examination setter for {class_level}, Subject: {subject}.
+                    Syllabus: "{syllabus}"
+                    Standard: {paper_standard} | Total Marks: {total_target_marks} | Time: {time_allowed}
+
+                    Required Sections & Questions:
+                    {bp_text}
+
+                    Strict Rules:
+                    - Every question must be 100% unique and distinct.
+                    - If MCQ: Provide 4 options labeled a, b, c, d.
+                    - If Fill in blanks: Include '________'.
+                    - If Match: Provide Column A and Column B.
+
+                    Return ONLY a valid JSON object matching:
+                    {{
+                      "general_instructions": [
+                        "1. All questions are compulsory.",
+                        "2. Read questions carefully."
+                      ],
+                      "sections": [
+                        {{
+                          "section_header": "SECTION NAME",
+                          "guidelines": ["Marks details"],
+                          "questions": [
+                            {{
+                              "q_no": "Q1.",
+                              "question_text": "Question statement...",
+                              "marks_text": "[1 Mark]",
+                              "options": {{"a": "Opt 1", "b": "Opt 2", "c": "Opt 3", "d": "Opt 4"}}
+                            }}
+                          ]
+                        }}
+                      ]
+                    }}
+                    """
+                    paper_data = run_gemini_json_prompt(api_key, prompt)
                 else:
-                    paper_data = generate_senior_cbse_paper(
-                        client=client,
-                        school_name=school_name,
-                        class_level=class_level,
-                        subject=subject,
-                        total_marks=total_target_marks,
-                        time_allowed=time_allowed,
-                        syllabus=syllabus,
-                        paper_standard=paper_standard
-                    )
+                    is_pyq = "PYQ" in paper_standard
+                    pyq_mandate = "For every question, provide authentic CBSE Board source in 'pyq_tag' (e.g. 'CBSE 2024 Delhi Set-1')." if is_pyq else ""
+                    
+                    if "065" in subject or "083" in subject:
+                        prompt = f"""
+                        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
+                        Generate full 37-Question CBSE Paper for syllabus: "{syllabus}"
+                        Total Marks: 70 | Time: 3 Hours | Standard: {paper_standard}
+                        {pyq_mandate}
+
+                        CBSE BLUEPRINT: Sec A (21 Qs x 1M), Sec B (7 Qs x 2M), Sec C (4 Qs x 3M), Sec D (2 Case Studies x 4M), Sec E (3 Qs x 5M).
+                        Return ONLY valid JSON.
+                        """
+                    elif "402" in subject or "417" in subject:
+                        prompt = f"""
+                        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
+                        Generate 21-Question CBSE paper for syllabus: "{syllabus}"
+                        Total Marks: 50 | Time: 2 Hours | Standard: {paper_standard}
+                        {pyq_mandate}
+
+                        CBSE IT-402 BLUEPRINT: Section A Objective (24 Marks), Section B Subjective (26 Marks).
+                        Return ONLY valid JSON.
+                        """
+                    else:
+                        prompt = f"""
+                        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
+                        Generate CBSE paper for syllabus: "{syllabus}"
+                        Total Marks: {total_target_marks}, Time: {time_allowed}, Standard: {paper_standard}
+                        {pyq_mandate}
+                        Sections A to E CBSE SQP format. Return ONLY valid JSON.
+                        """
+                    paper_data = run_gemini_json_prompt(api_key, prompt)
 
             gen_instructions = paper_data.get("general_instructions", [])
             sections_list = paper_data.get("sections", [])
