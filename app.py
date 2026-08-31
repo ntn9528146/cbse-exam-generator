@@ -5,6 +5,7 @@ import re
 from dotenv import load_dotenv
 import google.generativeai as genai
 from docx_generator import generate_and_save_docx
+import ast
 
 load_dotenv()
 
@@ -249,6 +250,9 @@ else:
 st.markdown("---")
 
 # ---------------- AI Helper Function (Active Models & Robust JSON Parsing) ----------------
+
+
+# ---------------- AI Helper Function (Strict JSON Mode) ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
@@ -267,18 +271,31 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     last_err = None
     for m in active_models:
         try:
-            model = genai.GenerativeModel(m)
+            # Enforce structured JSON output directly from API
+            model = genai.GenerativeModel(
+                model_name=m,
+                generation_config={"response_mime_type": "application/json"}
+            )
             response = model.generate_content(prompt_text)
             if response and response.text:
                 raw_text = response.text
                 break
-        except Exception as e:
-            last_err = e
-            continue
+        except Exception:
+            # Fallback without response_mime_type if model doesn't support it
+            try:
+                model = genai.GenerativeModel(m)
+                response = model.generate_content(prompt_text)
+                if response and response.text:
+                    raw_text = response.text
+                    break
+            except Exception as e:
+                last_err = e
+                continue
 
     if not raw_text:
         raise Exception(f"AI Generation Error: {last_err}")
 
+    # Strip markdown blocks
     clean_json = raw_text.strip()
     if clean_json.startswith("```json"):
         clean_json = clean_json[7:]
@@ -288,13 +305,29 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
         clean_json = clean_json[:-3]
     clean_json = clean_json.strip()
 
+    # 1. Standard JSON load
     try:
         return json.loads(clean_json)
     except Exception:
-        match = re.search(r"\{.*\}", clean_json, re.DOTALL)
-        if match:
+        pass
+
+    # 2. Python Dict / Single Quote fallback using ast.literal_eval
+    try:
+        data = ast.literal_eval(clean_json)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    # 3. Regex match fallback
+    match = re.search(r"\{.*\}", clean_json, re.DOTALL)
+    if match:
+        try:
             return json.loads(match.group(0))
-        raise Exception(f"AI generated text format is not valid JSON. Response start: {clean_json[:120]}")
+        except Exception:
+            return ast.literal_eval(match.group(0))
+
+    raise Exception("AI output parse nahi ho paya. Kripya button dobara click karein.")
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
