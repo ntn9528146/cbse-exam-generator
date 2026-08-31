@@ -253,7 +253,7 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
     # Strictly Active 2026 Models
-    models_to_test = ["gemini-3.6-flash", "gemini-3-flash"]
+    models_to_test = ["gemini-3.6-flash", "gemini-1.5-flash"]
     last_err = None
     
     for m in models_to_test:
