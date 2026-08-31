@@ -252,23 +252,27 @@ st.markdown("---")
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
-    # Strictly Active 2026 Models
-    models_to_test = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-    last_err = None
-    
-    for m in models_to_test:
-        try:
-            model = genai.GenerativeModel(m)
-            response = model.generate_content(prompt_text)
-            raw = response.text.strip()
-            raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
-            raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
-            raw = raw.strip("` \n\r")
-            return json.loads(raw)
-        except Exception as err:
-            last_err = err
-            continue
-    raise Exception(f"AI Generation Error: {str(last_err)}")
+    # Available models ko dynamically fetch karke working model choose karna
+    selected_model = None
+    try:
+        available_models = [
+            m.name for m in genai.list_models() 
+            if "generateContent" in m.supported_generation_methods
+        ]
+        # Prefer flash first, then pro, then any available model
+        for m in available_models:
+            if "flash" in m.lower():
+                selected_model = m
+                break
+        if not selected_model and available_models:
+            selected_model = available_models[0]
+    except Exception:
+        selected_model = "gemini-1.5-flash"
+
+    # API Call
+    model = genai.GenerativeModel(selected_model)
+    response = model.generate_content(prompt_text)
+    return response.text
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
