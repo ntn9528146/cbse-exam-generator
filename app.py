@@ -26,23 +26,32 @@ st.title("🎓 Automated Examination Paper Generator (Session 2026-27)")
 st.caption("Official CBSE Board (Classes 9-12) & Custom Junior (Classes Nursery-8th) Engine")
 
 # ---------------- Sidebar & School Branding ----------------
+# ---------------- Sidebar & School Branding ----------------
+# Auto-detect default school logo from repository
+default_logo_path = None
+if os.path.exists("school_logo.png"):
+    default_logo_path = "school_logo.png"
+elif os.path.exists("SA-Logo.png"):
+    default_logo_path = "SA-Logo.png"
+
 with st.sidebar:
     st.header("🏫 School Portal")
     st.success("🔒 System License Authenticated & Active")
     st.markdown("---")
-    st.subheader("School Logo")
+    
+    # Agar repo me default logo hai toh sidebar me dikhega
+    if default_logo_path:
+        st.subheader("Official School Logo")
+        st.image(default_logo_path, caption="Default Active Logo", width=140)
+    
     uploaded_logo = st.file_uploader("Upload / Override Logo (PNG / JPG)", type=["png", "jpg", "jpeg"])
 
-logo_temp_path = None
+# Set final logo path
+logo_temp_path = default_logo_path
 if uploaded_logo:
     with open("temp_logo.png", "wb") as f:
         f.write(uploaded_logo.getbuffer())
     logo_temp_path = "temp_logo.png"
-elif os.path.exists("school_logo.png"):
-    logo_temp_path = "school_logo.png"
-elif os.path.exists("SA-Logo.png"):
-    logo_temp_path = "SA-Logo.png"
-
 # ---------------- Classes & Filtered Subjects ----------------
 ALL_CLASSES = [
     "Nursery", "LKG", "UKG",
