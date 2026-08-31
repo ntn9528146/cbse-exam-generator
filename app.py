@@ -98,7 +98,7 @@ st.subheader("1. School & Examination Details")
 col_sc1, col_sc2 = st.columns([2, 1])
 with col_sc1:
     # Set default school name per client installation
-    school_name = st.text_input("School / Institution Name", value="Saraswati Academy")
+    school_name = st.text_input("School / Institution Name", value="Jai Arihant International School")
 
 col1, col2, col3 = st.columns(3)
 with col1:
