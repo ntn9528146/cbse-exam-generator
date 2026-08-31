@@ -249,30 +249,29 @@ else:
 st.markdown("---")
 
 # ---------------- AI Helper Function (Active Models) ----------------
+# ------------ AI Helper Function ------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
-    # Available models ko dynamically fetch karke working model choose karna
-    selected_model = None
-    try:
-        available_models = [
-            m.name for m in genai.list_models() 
-            if "generateContent" in m.supported_generation_methods
-        ]
-        # Prefer flash first, then pro, then any available model
-        for m in available_models:
-            if "flash" in m.lower():
-                selected_model = m
-                break
-        if not selected_model and available_models:
-            selected_model = available_models[0]
-    except Exception:
-        selected_model = "gemini-1.5-flash"
-
-    # API Call
-    model = genai.GenerativeModel(selected_model)
-    response = model.generate_content(prompt_text)
-    return response.text
+    # 2026 ke strictly active current models
+    models_to_test = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3-flash"
+    ]
+    
+    last_err = None
+    for m in models_to_test:
+        try:
+            model = genai.GenerativeModel(m)
+            response = model.generate_content(prompt_text)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_err = e
+            continue
+            
+    raise Exception(f"AI Generation Error: {last_err}")
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
