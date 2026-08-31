@@ -1,7 +1,6 @@
 import streamlit as st
 import os
-from db import fetch_questions
-from docx_generator import generate_and_save_docx
+
 
 st.set_page_config(page_title="CBSE Exam Paper Generator", layout="wide")
 
