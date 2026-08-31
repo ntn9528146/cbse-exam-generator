@@ -249,8 +249,8 @@ else:
 
 st.markdown("---")
 
-# ---------------- Direct AI Generator (No JSON Parsing Failures) ----------------
-def run_gemini_text_generator(api_key_str, prompt_text):
+# ---------------- AI Helper Generator ----------------
+def run_gemini_paper_generator(api_key_str, system_prompt, user_prompt):
     genai.configure(api_key=api_key_str)
     
     active_models = []
@@ -269,11 +269,17 @@ def run_gemini_text_generator(api_key_str, prompt_text):
         try:
             model = genai.GenerativeModel(
                 model_name=m,
-                generation_config={"temperature": 0.3, "max_output_tokens": 8192}
+                system_instruction=system_prompt,
+                generation_config={"temperature": 0.2, "max_output_tokens": 8192}
             )
-            response = model.generate_content(prompt_text)
+            response = model.generate_content(user_prompt)
             if response and response.text:
-                return response.text
+                # Sanitize output: remove any accidental thinking markdown
+                clean_res = response.text.strip()
+                # Remove thinking artifacts if any
+                clean_res = re.sub(r"^\*Let's .*?\n\n", "", clean_res, flags=re.DOTALL)
+                clean_res = re.sub(r"^<think>.*?</think>\n?", "", clean_res, flags=re.DOTALL)
+                return clean_res.strip()
         except Exception as e:
             last_err = e
             continue
@@ -328,7 +334,7 @@ def export_text_to_docx(school_name, class_level, subject, total_marks, time_all
             continue
         
         p = doc.add_paragraph()
-        if line_s.startswith("### ") or line_s.startswith("## ") or "SECTION" in line_s.upper():
+        if line_s.startswith("###") or line_s.startswith("##") or "SECTION" in line_s.upper():
             r = p.add_run(line_s.replace("###", "").replace("##", "").strip())
             r.bold = True
             r.font.size = Pt(11.5)
@@ -365,72 +371,148 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
     else:
         try:
             with st.spinner(f"🧠 Generating authentic examination paper for {class_level} - {subject}..."):
+                system_prompt = (
+                    "You are a strict CBSE Examination Paper Creator. "
+                    "CRITICAL: Do NOT write any thought process, scratchpad, reasoning, calculation notes, or meta explanations. "
+                    "Output ONLY the final, complete, authentic examination question paper directly ready to be printed."
+                )
+
                 if is_junior_class:
                     bp_text = "\n".join([f"- Section '{k}': Exactly {v['count']} questions ({v['marks']} Marks each)" for k, v in junior_blueprint.items()])
-                    prompt = f"""
-                    You are a Senior CBSE Examination Paper Setter for {class_level}, Subject: {subject}.
-                    Create a complete, ready-to-print question paper.
-                    Syllabus: "{syllabus}"
-                    Standard: {paper_standard} | Total Marks: {total_target_marks} | Time: {time_allowed}
+                    user_prompt = f"""
+Create a printed question paper for:
+Class: {class_level}
+Subject: {subject}
+Syllabus: {syllabus}
+Standard: {paper_standard}
+Total Marks: {total_target_marks}
+Time Allowed: {time_allowed}
 
-                    Blueprint & Sections:
-                    {bp_text}
+Required Blueprint:
+{bp_text}
 
-                    Instructions:
-                    - Include General Instructions at the top.
-                    - Format every section clearly: ### SECTION A: [NAME] ([Marks] Marks Each)
-                    - Number every question clearly: Q1., Q2., etc. with marks at the end like [1 Mark].
-                    - For MCQs, give clean options: (a) ..., (b) ..., (c) ..., (d) ...
-                    """
+Format strictly as follows:
+### General Instructions
+(List 2-3 standard points)
+
+For each section:
+### SECTION [NAME] ([Marks] Marks each)
+Q1. [Question text...] [Marks]
+(For MCQs provide options: (a) ..., (b) ..., (c) ..., (d) ...)
+"""
                 else:
                     is_pyq = "PYQ" in paper_standard
-                    pyq_tag = "Include real CBSE PYQ tags like [CBSE 2024] at the end of questions." if is_pyq else ""
+                    pyq_tag = "Include authentic CBSE PYQ tags like [CBSE 2024] next to questions." if is_pyq else ""
                     
                     if "402" in subject or "417" in subject:
-                        prompt = f"""
-                        You are an Official CBSE Board Paper Setter for {class_level}, Subject: {subject}.
-                        Create a complete official 21-Question examination paper for Syllabus: "{syllabus}".
-                        Total Marks: 50 | Time Allowed: 2 Hours | Standard: {paper_standard}
-                        {pyq_tag}
+                        user_prompt = f"""
+Generate an official CBSE Skill Subject Question Paper:
+Class: {class_level}
+Subject: {subject}
+Syllabus: {syllabus}
+Total Marks: 50 | Time: 2 Hours
+Standard: {paper_standard}
+{pyq_tag}
 
-                        STRUCTURE:
-                        - General Instructions
-                        - ### SECTION A: OBJECTIVE TYPE QUESTIONS (24 Marks)
-                          Include Q1 to Q5 with sub-parts (Employability Skills & Subject Specific Skills MCQs, 1 Mark each).
-                        - ### SECTION B: SUBJECTIVE TYPE QUESTIONS (26 Marks)
-                          Include Short Answer (2 Marks) and Long Answer (4 Marks) questions.
+Strict Structure:
+### General Instructions
+1. Please read all instructions carefully.
+2. This question paper consists of 21 questions in two sections: Section A & Section B.
+3. Section A has Objective type questions (24 marks).
+4. Section B has Subjective type questions (26 marks).
 
-                        Format:
-                        - Format every question clearly (e.g. Q1. Question text... [1 Mark])
-                        - Format MCQs with options (a), (b), (c), (d) on separate lines.
-                        """
+### SECTION A: OBJECTIVE TYPE QUESTIONS (24 Marks)
+Q1. Answer any 4 out of the given 6 questions on Employability Skills (1 x 4 = 4 marks)
+(i) [Question text] (a) ... (b) ... (c) ... (d) ...
+(ii) [Question text] (a) ... (b) ... (c) ... (d) ...
+(iii) [Question text] (a) ... (b) ... (c) ... (d) ...
+(iv) [Question text] (a) ... (b) ... (c) ... (d) ...
+(v) [Question text] (a) ... (b) ... (c) ... (d) ...
+(vi) [Question text] (a) ... (b) ... (c) ... (d) ...
+
+Q2. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
+(List 6 MCQs with options a, b, c, d)
+
+Q3. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
+(List 6 MCQs with options a, b, c, d)
+
+Q4. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
+(List 6 MCQs with options a, b, c, d)
+
+Q5. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
+(List 6 MCQs with options a, b, c, d)
+
+### SECTION B: SUBJECTIVE TYPE QUESTIONS (26 Marks)
+**Answer any 3 out of the given 5 questions on Employability Skills in 20-30 words each (2 x 3 = 6 marks):**
+Q6. [Question text] [2 Marks]
+Q7. [Question text] [2 Marks]
+Q8. [Question text] [2 Marks]
+Q9. [Question text] [2 Marks]
+Q10. [Question text] [2 Marks]
+
+**Answer any 4 out of the given 6 questions on Subject Specific Skills in 20-30 words each (2 x 4 = 8 marks):**
+Q11. [Question text] [2 Marks]
+Q12. [Question text] [2 Marks]
+Q13. [Question text] [2 Marks]
+Q14. [Question text] [2 Marks]
+Q15. [Question text] [2 Marks]
+Q16. [Question text] [2 Marks]
+
+**Answer any 3 out of the given 5 questions on Subject Specific Skills in 50-80 words each (4 x 3 = 12 marks):**
+Q17. [Question text] [4 Marks]
+Q18. [Question text] [4 Marks]
+Q19. [Question text] [4 Marks]
+Q20. [Question text] [4 Marks]
+Q21. [Question text] [4 Marks]
+"""
                     elif "065" in subject or "083" in subject:
-                        prompt = f"""
-                        You are an Official CBSE Board Paper Setter for {class_level}, Subject: {subject}.
-                        Create full 37-Question paper for Syllabus: "{syllabus}".
-                        Total Marks: 70 | Time: 3 Hours | Standard: {paper_standard}
-                        {pyq_tag}
+                        user_prompt = f"""
+Generate an official CBSE Board Question Paper:
+Class: {class_level}
+Subject: {subject}
+Syllabus: {syllabus}
+Total Marks: 70 | Time: 3 Hours
+Standard: {paper_standard}
+{pyq_tag}
 
-                        STRUCTURE:
-                        - General Instructions
-                        - ### SECTION A (21 Questions x 1 Mark) - MCQs & Assertion Reason
-                        - ### SECTION B (7 Questions x 2 Marks) - Short Answer
-                        - ### SECTION C (4 Questions x 3 Marks) - Short Answer Type II
-                        - ### SECTION D (2 Questions x 4 Marks) - Case Studies
-                        - ### SECTION E (3 Questions x 5 Marks) - Long Answer Type
+Strict Structure:
+### General Instructions
+(Standard 5 instructions)
 
-                        Format every question clearly (e.g. Q1. ... [1 Mark]).
-                        """
+### SECTION A (21 Marks)
+(Questions Q1 to Q21: 1 Mark each MCQs and Assertion-Reason)
+
+### SECTION B (14 Marks)
+(Questions Q22 to Q28: 2 Marks each)
+
+### SECTION C (12 Marks)
+(Questions Q29 to Q32: 3 Marks each)
+
+### SECTION D (8 Marks)
+(Questions Q33 to Q34: 4 Marks each Case Studies)
+
+### SECTION E (15 Marks)
+(Questions Q35 to Q37: 5 Marks each)
+"""
                     else:
-                        prompt = f"""
-                        You are an Official CBSE Board Paper Setter for {class_level}, Subject: {subject}.
-                        Create complete CBSE paper for Syllabus: "{syllabus}".
-                        Total Marks: {total_target_marks} | Time: {time_allowed} | Standard: {paper_standard}
-                        {pyq_tag}
-                        Format with General Instructions and Sections A to E with clear question numbers (Q1., Q2., etc.).
-                        """
+                        user_prompt = f"""
+Generate an official CBSE Question Paper:
+Class: {class_level}
+Subject: {subject}
+Syllabus: {syllabus}
+Total Marks: {total_target_marks} | Time: {time_allowed}
+Standard: {paper_standard}
+{pyq_tag}
 
-                generated_paper_text = run_gemini_text_generator(api_key, prompt)
+Format:
+### General Instructions
+### SECTION A (MCQs - 1 Mark each)
+### SECTION B (VSA - 2 Marks each)
+### SECTION C (SA - 3 Marks each)
+### SECTION D (Long Answer / Case Studies - 4/5 Marks each)
+"""
+
+                generated_paper_text = run_gemini_paper_generator(api_key, system_prompt, user_prompt)
 
             # Export to DOCX
             filepath, filename = export_text_to_docx(
