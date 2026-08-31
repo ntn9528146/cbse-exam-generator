@@ -4,14 +4,17 @@ import re
 from dotenv import load_dotenv
 import google.generativeai as genai
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import parse_xml, OxmlElement
+from docx.oxml.ns import nsdecls, qn
 
 load_dotenv()
 
-st.set_page_config(page_title="CBSE AI Exam Paper Generator", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="CBSE Official Exam Paper Generator", page_icon="🎓", layout="wide")
 
-st.title("🎓 Examination Paper Generator (Session 2026-27)")
+st.title("🎓 Examination Paper Generator (CBSE SQP Standard)")
 st.caption("Jai Arihant International School | Automated CBSE (9-12) & Custom Junior (Upto 8th) Engine")
 
 # ---------------- API Key Configuration ----------------
@@ -249,7 +252,7 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper Generator ----------------
+# ---------------- AI Helper Function ----------------
 def run_gemini_paper_generator(api_key_str, system_prompt, user_prompt):
     genai.configure(api_key=api_key_str)
     
@@ -274,9 +277,7 @@ def run_gemini_paper_generator(api_key_str, system_prompt, user_prompt):
             )
             response = model.generate_content(user_prompt)
             if response and response.text:
-                # Sanitize output: remove any accidental thinking markdown
                 clean_res = response.text.strip()
-                # Remove thinking artifacts if any
                 clean_res = re.sub(r"^\*Let's .*?\n\n", "", clean_res, flags=re.DOTALL)
                 clean_res = re.sub(r"^<think>.*?</think>\n?", "", clean_res, flags=re.DOTALL)
                 return clean_res.strip()
@@ -286,74 +287,193 @@ def run_gemini_paper_generator(api_key_str, system_prompt, user_prompt):
 
     raise Exception(f"AI Generation Error: {last_err}")
 
-def export_text_to_docx(school_name, class_level, subject, total_marks, time_allowed, raw_content, logo_path=None):
-    doc = Document()
-    for s in doc.sections:
-        s.top_margin = Inches(0.6)
-        s.bottom_margin = Inches(0.6)
-        s.left_margin = Inches(0.75)
-        s.right_margin = Inches(0.75)
+# ---------------- Exact CBSE 3-Column Table DOCX Formatter ----------------
+def set_cell_border(cell, **kwargs):
+    """Sets standard borders on Word table cells"""
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcBorders = parse_xml(
+        r'<w:tcBorders %s>'
+        r'<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        r'<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        r'<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        r'<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+        r'</w:tcBorders>' % nsdecls('w')
+    )
+    tcPr.append(tcBorders)
 
+def add_bold_runs(paragraph, text):
+    tokens = re.split(r'(\*\*.*?\*\*)', text)
+    for token in tokens:
+        if token.startswith('**') and token.endswith('**'):
+            r = paragraph.add_run(token[2:-2])
+            r.bold = True
+        else:
+            paragraph.add_run(token)
+
+def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_allowed, raw_content, logo_path=None):
+    doc = Document()
+    
+    for s in doc.sections:
+        s.top_margin = Inches(0.5)
+        s.bottom_margin = Inches(0.5)
+        s.left_margin = Inches(0.6)
+        s.right_margin = Inches(0.6)
+
+    # 1. School Logo & Header
     if logo_path and os.path.exists(logo_path):
         try:
             p_logo = doc.add_paragraph()
             p_logo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_logo.add_run().add_picture(logo_path, width=Inches(1.0))
+            p_logo.paragraph_format.space_after = Pt(2)
+            p_logo.add_run().add_picture(logo_path, width=Inches(0.85))
         except Exception:
             pass
 
-    # School Header
-    p_title = doc.add_paragraph()
-    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r1 = p_title.add_run(school_name.upper())
+    p_sch = doc.add_paragraph()
+    p_sch.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_sch.paragraph_format.space_after = Pt(2)
+    r1 = p_sch.add_run(school_name.upper())
     r1.bold = True
-    r1.font.size = Pt(16)
+    r1.font.size = Pt(14)
 
-    p_sub = doc.add_paragraph()
-    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r2 = p_sub.add_run(f"EXAMINATION (SESSION 2026-2027)\n{class_level.upper()} — {subject.upper()}")
+    p_sess = doc.add_paragraph()
+    p_sess.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_sess.paragraph_format.space_after = Pt(2)
+    r2 = p_sess.add_run(f"SAMPLE QUESTION PAPER (SESSION 2026-2027)\n{class_level.upper()} — {subject.upper()}")
     r2.bold = True
     r2.font.size = Pt(12)
 
-    # Info Table
-    tbl = doc.add_table(rows=1, cols=2)
-    tbl.autofit = False
-    tbl.columns[0].width = Inches(3.5)
-    tbl.columns[1].width = Inches(3.5)
-    tbl.cell(0, 0).paragraphs[0].text = f"Time Allowed: {time_allowed}"
-    pr = tbl.cell(0, 1).paragraphs[0]
-    pr.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    pr.text = f"Maximum Marks: {total_marks}"
+    # 2. Time & Marks Header
+    p_tm = doc.add_paragraph()
+    p_tm.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p_tm.paragraph_format.space_before = Pt(4)
+    p_tm.paragraph_format.space_after = Pt(4)
+    r_t = p_tm.add_run(f"Time Allowed: {time_allowed}")
+    r_t.bold = True
+    p_tm.add_run("\t\t\t\t\t\t\t")
+    r_m = p_tm.add_run(f"Maximum Marks: {total_marks}")
+    r_m.bold = True
+
+    # 3. General Instructions
+    lines = [l.strip() for l in raw_content.split("\n") if l.strip() and l.strip() != "---"]
+    
+    in_gi = True
+    gi_lines = []
+    question_lines = []
+
+    for line in lines:
+        if line.startswith("### SECTION") or line.startswith("SECTION A") or line.startswith("**SECTION"):
+            in_gi = False
+        if in_gi:
+            gi_lines.append(line)
+        else:
+            question_lines.append(line)
+
+    # Print General Instructions
+    for gl in gi_lines:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(1)
+        p.paragraph_format.space_after = Pt(1)
+        if "GENERAL INSTRUCTIONS" in gl.upper():
+            r = p.add_run(gl.replace("###", "").replace("**", "").strip())
+            r.bold = True
+            r.underline = True
+        else:
+            add_bold_runs(p, gl)
 
     doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-    # Append question text line by line
-    for line in raw_content.split("\n"):
-        line_s = line.strip()
-        if not line_s:
+    # 4. Exact 3-Column CBSE Table
+    table = doc.add_table(rows=0, cols=3)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    
+    col_widths = [Inches(0.8), Inches(5.4), Inches(0.8)]
+
+    # Process Question Blocks into Table Rows
+    curr_q_no = ""
+    curr_q_text = []
+    curr_marks = ""
+
+    def flush_question(q_no, q_text_list, marks):
+        if not q_no and not q_text_list:
+            return
+        row = table.add_row()
+        for idx, width in enumerate(col_widths):
+            row.cells[idx].width = width
+            set_cell_border(row.cells[idx])
+
+        # Cell 0: Q.No.
+        c0 = row.cells[0].paragraphs[0]
+        c0.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = c0.add_run(q_no)
+        r.bold = True
+
+        # Cell 1: Question content
+        c1 = row.cells[1].paragraphs[0]
+        c1.paragraph_format.space_before = Pt(1)
+        c1.paragraph_format.space_after = Pt(1)
+        for idx, t in enumerate(q_text_list):
+            if idx > 0:
+                p = row.cells[1].add_paragraph()
+                p.paragraph_format.space_before = Pt(1)
+                p.paragraph_format.space_after = Pt(1)
+                add_bold_runs(p, t)
+            else:
+                add_bold_runs(c1, t)
+
+        # Cell 2: Marks
+        c2 = row.cells[2].paragraphs[0]
+        c2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_m = c2.add_run(marks)
+        r_m.bold = True
+
+    for ql in question_lines:
+        # Section Header Row
+        if "SECTION" in ql.upper() and (ql.startswith("###") or ql.startswith("**") or len(ql) < 70):
+            flush_question(curr_q_no, curr_q_text, curr_marks)
+            curr_q_no, curr_q_text, curr_marks = "", [], ""
+            
+            # Header Row across 3 columns
+            sec_row = table.add_row()
+            cell_merged = sec_row.cells[0]
+            cell_merged.merge(sec_row.cells[1]).merge(sec_row.cells[2])
+            set_cell_border(cell_merged)
+            
+            p_sec = cell_merged.paragraphs[0]
+            p_sec.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_sec.paragraph_format.space_before = Pt(4)
+            p_sec.paragraph_format.space_after = Pt(4)
+            r = p_sec.add_run(ql.replace("###", "").replace("**", "").strip())
+            r.bold = True
             continue
-        
-        p = doc.add_paragraph()
-        if line_s.startswith("###") or line_s.startswith("##") or "SECTION" in line_s.upper():
-            r = p.add_run(line_s.replace("###", "").replace("##", "").strip())
-            r.bold = True
-            r.font.size = Pt(11.5)
-            p.paragraph_format.space_before = Pt(8)
-            p.paragraph_format.space_after = Pt(3)
-        elif line_s.startswith("Q") or re.match(r"^\d+\.", line_s):
-            r = p.add_run(line_s)
-            r.bold = True
-            p.paragraph_format.space_before = Pt(4)
-        elif line_s.startswith("(") or line_s.startswith("- "):
-            p.paragraph_format.left_indent = Inches(0.3)
-            p.add_run(line_s)
+
+        # Detect Question start (e.g. "Q1.", "1.", "Q.1")
+        m = re.match(r"^(Q\s*\.?\s*\d+|\d+)\.?\s*(.*)", ql)
+        if m and not ql.startswith("(") and not ql.startswith("-"):
+            flush_question(curr_q_no, curr_q_text, curr_marks)
+            curr_q_no = m.group(1).replace("Q", "").replace(".", "").strip() + "."
+            
+            rest_text = m.group(2).strip()
+            # Extract marks if at end (e.g. [1] or [2 Marks])
+            m_marks = re.search(r"\[(\d+)\s*(?:Marks|Mark)?\]$", rest_text)
+            if m_marks:
+                curr_marks = m_marks.group(1)
+                rest_text = rest_text[:m_marks.start()].strip()
+            else:
+                curr_marks = "1"
+            
+            curr_q_text = [rest_text] if rest_text else []
         else:
-            p.add_run(line_s)
+            if curr_q_no:
+                curr_q_text.append(ql)
+
+    flush_question(curr_q_no, curr_q_text, curr_marks)
 
     os.makedirs("generated_papers", exist_ok=True)
     clean_sub = re.sub(r'[^a-zA-Z0-9_]', '_', subject)
     clean_cls = re.sub(r'[^a-zA-Z0-9_]', '_', class_level)
-    fname = f"{clean_cls}_{clean_sub}_Exam_Paper.docx"
+    fname = f"{clean_cls}_{clean_sub}_Official_CBSE_Paper.docx"
     fpath = os.path.join("generated_papers", fname)
     doc.save(fpath)
     return fpath, fname
@@ -370,59 +490,58 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
         st.error(f"❌ Junior Blueprint Total ({current_calculated}) must match Target Total Marks ({total_target_marks}). Use Auto-Distribute button.")
     else:
         try:
-            with st.spinner(f"🧠 Generating authentic examination paper for {class_level} - {subject}..."):
+            with st.spinner(f"🧠 Generating authentic CBSE 3-Column Paper for {class_level} - {subject}..."):
                 system_prompt = (
-                    "You are a strict CBSE Examination Paper Creator. "
-                    "CRITICAL: Do NOT write any thought process, scratchpad, reasoning, calculation notes, or meta explanations. "
-                    "Output ONLY the final, complete, authentic examination question paper directly ready to be printed."
+                    "You are a Senior CBSE Examination Paper Setter adhering strictly to CBSE SQP Session 2025-26 & 2026-27 blueprints. "
+                    "CRITICAL: Do NOT write any thinking process or scratchpad. "
+                    "Output ONLY the question paper text. Format every question starting with Q1., Q2., etc., followed by question text, options on separate lines, and marks at the end like [1] or [2]."
                 )
 
                 if is_junior_class:
                     bp_text = "\n".join([f"- Section '{k}': Exactly {v['count']} questions ({v['marks']} Marks each)" for k, v in junior_blueprint.items()])
                     user_prompt = f"""
 Create a printed question paper for:
-Class: {class_level}
-Subject: {subject}
+Class: {class_level} | Subject: {subject}
 Syllabus: {syllabus}
-Standard: {paper_standard}
-Total Marks: {total_target_marks}
-Time Allowed: {time_allowed}
+Standard: {paper_standard} | Total Marks: {total_target_marks} | Time Allowed: {time_allowed}
 
 Required Blueprint:
 {bp_text}
 
-Format strictly as follows:
+Format:
 ### General Instructions
-(List 2-3 standard points)
+1. All questions are compulsory.
+2. Read each question carefully.
 
-For each section:
-### SECTION [NAME] ([Marks] Marks each)
+Format each section:
+### SECTION [NAME] ([Marks] Marks Each)
 Q1. [Question text...] [Marks]
-(For MCQs provide options: (a) ..., (b) ..., (c) ..., (d) ...)
+(a) Option 1
+(b) Option 2
+(c) Option 3
+(d) Option 4
 """
                 else:
                     is_pyq = "PYQ" in paper_standard
-                    pyq_tag = "Include authentic CBSE PYQ tags like [CBSE 2024] next to questions." if is_pyq else ""
+                    pyq_tag = "Include authentic CBSE PYQ tags like [CBSE 2024] at the end of questions." if is_pyq else ""
                     
                     if "402" in subject or "417" in subject:
                         user_prompt = f"""
 Generate an official CBSE Skill Subject Question Paper:
-Class: {class_level}
-Subject: {subject}
+Class: {class_level}, Subject: {subject}
 Syllabus: {syllabus}
-Total Marks: 50 | Time: 2 Hours
+Total Marks: 50 | Time Allowed: 2 Hours
 Standard: {paper_standard}
 {pyq_tag}
 
-Strict Structure:
+Official CBSE Structure:
 ### General Instructions
-1. Please read all instructions carefully.
+1. Please read the instructions carefully.
 2. This question paper consists of 21 questions in two sections: Section A & Section B.
-3. Section A has Objective type questions (24 marks).
-4. Section B has Subjective type questions (26 marks).
+3. Section A has Objective type questions (24 marks). Section B has Subjective type questions (26 marks).
 
-### SECTION A: OBJECTIVE TYPE QUESTIONS (24 Marks)
-Q1. Answer any 4 out of the given 6 questions on Employability Skills (1 x 4 = 4 marks)
+### SECTION A: OBJECTIVE TYPE QUESTIONS (24 MARKS)
+Q1. Answer any 4 out of the given 6 questions on Employability Skills (1 x 4 = 4 marks) [4]
 (i) [Question text] (a) ... (b) ... (c) ... (d) ...
 (ii) [Question text] (a) ... (b) ... (c) ... (d) ...
 (iii) [Question text] (a) ... (b) ... (c) ... (d) ...
@@ -430,75 +549,64 @@ Q1. Answer any 4 out of the given 6 questions on Employability Skills (1 x 4 = 4
 (v) [Question text] (a) ... (b) ... (c) ... (d) ...
 (vi) [Question text] (a) ... (b) ... (c) ... (d) ...
 
-Q2. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
-(List 6 MCQs with options a, b, c, d)
+Q2. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks) [5]
+Q3. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks) [5]
+Q4. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks) [5]
+Q5. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks) [5]
 
-Q3. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
-(List 6 MCQs with options a, b, c, d)
+### SECTION B: SUBJECTIVE TYPE QUESTIONS (26 MARKS)
+Q6. [Question text on Employability Skills] [2]
+Q7. [Question text on Employability Skills] [2]
+Q8. [Question text on Employability Skills] [2]
+Q9. [Question text on Employability Skills] [2]
+Q10. [Question text on Employability Skills] [2]
 
-Q4. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
-(List 6 MCQs with options a, b, c, d)
+Q11. [Question text on Subject Specific Skills] [2]
+Q12. [Question text on Subject Specific Skills] [2]
+Q13. [Question text on Subject Specific Skills] [2]
+Q14. [Question text on Subject Specific Skills] [2]
+Q15. [Question text on Subject Specific Skills] [2]
+Q16. [Question text on Subject Specific Skills] [2]
 
-Q5. Answer any 5 out of the given 6 questions on Subject Specific Skills (1 x 5 = 5 marks)
-(List 6 MCQs with options a, b, c, d)
-
-### SECTION B: SUBJECTIVE TYPE QUESTIONS (26 Marks)
-**Answer any 3 out of the given 5 questions on Employability Skills in 20-30 words each (2 x 3 = 6 marks):**
-Q6. [Question text] [2 Marks]
-Q7. [Question text] [2 Marks]
-Q8. [Question text] [2 Marks]
-Q9. [Question text] [2 Marks]
-Q10. [Question text] [2 Marks]
-
-**Answer any 4 out of the given 6 questions on Subject Specific Skills in 20-30 words each (2 x 4 = 8 marks):**
-Q11. [Question text] [2 Marks]
-Q12. [Question text] [2 Marks]
-Q13. [Question text] [2 Marks]
-Q14. [Question text] [2 Marks]
-Q15. [Question text] [2 Marks]
-Q16. [Question text] [2 Marks]
-
-**Answer any 3 out of the given 5 questions on Subject Specific Skills in 50-80 words each (4 x 3 = 12 marks):**
-Q17. [Question text] [4 Marks]
-Q18. [Question text] [4 Marks]
-Q19. [Question text] [4 Marks]
-Q20. [Question text] [4 Marks]
-Q21. [Question text] [4 Marks]
+Q17. [Long Answer Question on Subject Specific Skills] [4]
+Q18. [Long Answer Question on Subject Specific Skills] [4]
+Q19. [Long Answer Question on Subject Specific Skills] [4]
+Q20. [Long Answer Question on Subject Specific Skills] [4]
+Q21. [Long Answer Question on Subject Specific Skills] [4]
 """
                     elif "065" in subject or "083" in subject:
                         user_prompt = f"""
 Generate an official CBSE Board Question Paper:
-Class: {class_level}
-Subject: {subject}
+Class: {class_level}, Subject: {subject}
 Syllabus: {syllabus}
 Total Marks: 70 | Time: 3 Hours
 Standard: {paper_standard}
 {pyq_tag}
 
-Strict Structure:
 ### General Instructions
-(Standard 5 instructions)
+1. This question paper contains 37 questions. All questions are compulsory.
 
 ### SECTION A (21 Marks)
-(Questions Q1 to Q21: 1 Mark each MCQs and Assertion-Reason)
+Q1. [Question text] [1]
+(a) ... (b) ... (c) ... (d) ...
+(List Q1 to Q21)
 
 ### SECTION B (14 Marks)
-(Questions Q22 to Q28: 2 Marks each)
+(List Q22 to Q28 with [2] marks)
 
 ### SECTION C (12 Marks)
-(Questions Q29 to Q32: 3 Marks each)
+(List Q29 to Q32 with [3] marks)
 
 ### SECTION D (8 Marks)
-(Questions Q33 to Q34: 4 Marks each Case Studies)
+(List Q33 to Q34 Case Studies with [4] marks)
 
 ### SECTION E (15 Marks)
-(Questions Q35 to Q37: 5 Marks each)
+(List Q35 to Q37 with [5] marks)
 """
                     else:
                         user_prompt = f"""
 Generate an official CBSE Question Paper:
-Class: {class_level}
-Subject: {subject}
+Class: {class_level}, Subject: {subject}
 Syllabus: {syllabus}
 Total Marks: {total_target_marks} | Time: {time_allowed}
 Standard: {paper_standard}
@@ -506,16 +614,17 @@ Standard: {paper_standard}
 
 Format:
 ### General Instructions
-### SECTION A (MCQs - 1 Mark each)
-### SECTION B (VSA - 2 Marks each)
-### SECTION C (SA - 3 Marks each)
-### SECTION D (Long Answer / Case Studies - 4/5 Marks each)
+### SECTION A (Q1 to Q20 MCQs with [1] mark)
+### SECTION B (Q21 to Q25 with [2] marks)
+### SECTION C (Q26 to Q31 with [3] marks)
+### SECTION D (Q32 to Q35 with [5] marks)
+### SECTION E (Q36 to Q38 Case Studies with [4] marks)
 """
 
                 generated_paper_text = run_gemini_paper_generator(api_key, system_prompt, user_prompt)
 
-            # Export to DOCX
-            filepath, filename = export_text_to_docx(
+            # Export to DOCX with official 3-column table
+            filepath, filename = export_cbse_sqp_docx(
                 school_name=school_name,
                 class_level=class_level,
                 subject=subject,
@@ -525,11 +634,11 @@ Format:
                 logo_path=logo_temp_path
             )
 
-            st.success(f"🎉 Exam Paper generated successfully and saved to: **`{filepath}`**")
+            st.success(f"🎉 Official CBSE 3-Column Paper generated successfully and saved to: **`{filepath}`**")
 
             with open(filepath, "rb") as f:
                 st.download_button(
-                    label="📥 Download Word Document (.docx)",
+                    label="📥 Download Official Word Document (.docx)",
                     data=f,
                     file_name=filename,
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -543,9 +652,9 @@ Format:
                 <div style="border: 2px solid #333; padding: 25px; border-radius: 6px; background-color: #ffffff; color: #111; font-family: 'Times New Roman', serif;">
                     <div style="text-align: center;">
                         <h2 style="margin: 0; font-size: 22px; font-weight: bold;">{school_name.upper()}</h2>
-                        <h4 style="margin: 5px 0; font-size: 16px;">EXAMINATION (SESSION 2026-2027)</h4>
+                        <h4 style="margin: 5px 0; font-size: 16px;">SAMPLE QUESTION PAPER (SESSION 2026-2027)</h4>
                         <h3 style="margin: 5px 0; color: #1a365d; font-size: 18px;">{class_level.upper()} — {subject.upper()}</h3>
-                        <p style="margin: 5px 0; font-size: 14px;"><b>Maximum Marks:</b> {total_target_marks} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Time Allowed:</b> {time_allowed.upper()}</p>
+                        <p style="margin: 5px 0; font-size: 14px;"><b>Time Allowed:</b> {time_allowed.upper()} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Maximum Marks:</b> {total_target_marks}</p>
                     </div>
                     <hr style="margin: 15px 0;">
                 </div>
