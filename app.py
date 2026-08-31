@@ -249,10 +249,11 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper & Robust JSON Parser ----------------
+# ---------------- AI Helper & Bulletproof JSON Parser ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
+    # 1. Dynamically get models with generateContent support
     active_models = []
     try:
         for m in genai.list_models():
@@ -267,14 +268,15 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     raw_text = None
     last_err = None
     
-    # 1. API Call with Structured JSON Enforced
+    # 2. API Call with large output token limit and JSON enforcement
     for m in active_models:
         try:
             model = genai.GenerativeModel(
                 model_name=m,
                 generation_config={
                     "response_mime_type": "application/json",
-                    "temperature": 0.2
+                    "temperature": 0.2,
+                    "max_output_tokens": 8192
                 }
             )
             response = model.generate_content(prompt_text)
@@ -283,7 +285,10 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
                 break
         except Exception:
             try:
-                model = genai.GenerativeModel(m)
+                model = genai.GenerativeModel(
+                    model_name=m,
+                    generation_config={"max_output_tokens": 8192}
+                )
                 response = model.generate_content(prompt_text)
                 if response and response.text:
                     raw_text = response.text
@@ -295,7 +300,7 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     if not raw_text:
         raise Exception(f"AI Generation Error: {last_err}")
 
-    # 2. Multi-tier Robust Parser
+    # 3. Clean and parse JSON
     clean_text = raw_text.strip()
     if clean_text.startswith("```"):
         clean_text = re.sub(r"^```[a-zA-Z]*\n?", "", clean_text)
@@ -308,16 +313,22 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     except Exception:
         pass
 
-    # Step B: Substring JSON block extraction
+    # Step B: Auto-close unclosed brackets if truncated
+    candidate = clean_text
     match = re.search(r"(\{.*\})", clean_text, re.DOTALL)
-    candidate = match.group(1) if match else clean_text
+    if match:
+        candidate = match.group(1)
+    else:
+        open_b = candidate.count("{") - candidate.count("}")
+        open_sq = candidate.count("[") - candidate.count("]")
+        candidate = candidate + ("]" * max(0, open_sq)) + ("}" * max(0, open_b))
 
     try:
         return json.loads(candidate)
     except Exception:
         pass
 
-    # Step C: Safe Python Literal Eval handling numeric codes like 083, 065
+    # Step C: Safe AST literal eval (handles leading zero integers like 083, 065)
     try:
         sanitized_ast = re.sub(r'(?<=[:,\s\[])(0\d+)(?=[,\s\]\}])', r'"\1"', candidate)
         parsed_ast = ast.literal_eval(sanitized_ast)
@@ -336,7 +347,7 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     except Exception:
         pass
 
-    raise Exception("Output JSON format parse nahi ho paya. Kripya Generate button dobara click karein.")
+    raise Exception("Output JSON parse nahi ho paya. Kripya Generate button dobara dabayein.")
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
@@ -368,7 +379,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                     - If Fill in blanks: Include '________'.
                     - If Match: Provide Column A and Column B.
 
-                    Output MUST be a JSON object with this exact schema (use standard double quotes):
+                    Output MUST be a valid JSON object matching this structure (use standard double quotes):
                     {{
                       "general_instructions": [
                         "1. All questions are compulsory.",
