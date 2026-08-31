@@ -7,32 +7,31 @@ from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml import parse_xml, OxmlElement
-from docx.oxml.ns import nsdecls, qn
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 
 load_dotenv()
 
-st.set_page_config(page_title="CBSE Official Exam Paper Generator", page_icon="🎓", layout="wide")
+st.set_page_config(
+    page_title="Examination Paper Generator",
+    page_icon="🎓",
+    layout="wide"
+)
 
-st.title("🎓 Examination Paper Generator (CBSE SQP Standard)")
-st.caption("Jai Arihant International School | Automated CBSE (9-12) & Custom Junior (Upto 8th) Engine")
+# ---------------- Secure Backend API Key ----------------
+# API Key is loaded securely from Streamlit Secrets or Environment Variable
+api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", None))
 
-# ---------------- API Key Configuration ----------------
-api_key = None
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-elif os.getenv("GEMINI_API_KEY"):
-    api_key = os.getenv("GEMINI_API_KEY")
+st.title("🎓 Automated Examination Paper Generator (Session 2026-27)")
+st.caption("Official CBSE Board (Classes 9-12) & Custom Junior (Classes Nursery-8th) Engine")
 
+# ---------------- Sidebar & School Branding ----------------
 with st.sidebar:
-    st.header("🔑 Settings")
-    sidebar_key = st.text_input("Gemini API Key:", value=api_key if api_key else "", type="password")
-    if sidebar_key:
-        api_key = sidebar_key.strip()
-    
+    st.header("🏫 School Portal")
+    st.success("🔒 System License Authenticated & Active")
     st.markdown("---")
-    st.subheader("🏫 School Logo")
-    uploaded_logo = st.file_uploader("Upload School Logo (PNG / JPG)", type=["png", "jpg", "jpeg"])
+    st.subheader("School Logo")
+    uploaded_logo = st.file_uploader("Upload / Override Logo (PNG / JPG)", type=["png", "jpg", "jpeg"])
 
 logo_temp_path = None
 if uploaded_logo:
@@ -41,6 +40,8 @@ if uploaded_logo:
     logo_temp_path = "temp_logo.png"
 elif os.path.exists("school_logo.png"):
     logo_temp_path = "school_logo.png"
+elif os.path.exists("SA-Logo.png"):
+    logo_temp_path = "SA-Logo.png"
 
 # ---------------- Classes & Filtered Subjects ----------------
 ALL_CLASSES = [
@@ -96,7 +97,8 @@ DEFAULT_JUNIOR_MARKS = {
 st.subheader("1. School & Examination Details")
 col_sc1, col_sc2 = st.columns([2, 1])
 with col_sc1:
-    school_name = st.text_input("School / Institution Name", value="Jai Arihant International School")
+    # Set default school name per client installation
+    school_name = st.text_input("School / Institution Name", value="Saraswati Academy")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -236,11 +238,11 @@ if is_junior_class:
     col_btn1, col_btn2 = st.columns([2, 2])
     with col_btn1:
         if current_calculated == total_target_marks:
-            st.success(f"✅ Marks Perfectly Matched: **{current_calculated} / {total_target_marks}**")
+            st.success(f"✅ Marks Matched: **{current_calculated} / {total_target_marks}**")
         else:
-            st.warning(f"⚠️ Current Total: **{current_calculated}** | Target Total: **{total_target_marks}** (Diff: {total_target_marks - current_calculated})")
+            st.warning(f"⚠️ Current Total: **{current_calculated}** | Target: **{total_target_marks}** (Diff: {total_target_marks - current_calculated})")
     with col_btn2:
-        st.button("🪄 Auto-Distribute Marks (Min 2 Qs Per Type)", on_click=auto_distribute_junior_marks, args=(total_target_marks,))
+        st.button("🪄 Auto-Distribute Marks", on_click=auto_distribute_junior_marks, args=(total_target_marks,))
 
 else:
     if "065" in subject or "083" in subject:
@@ -252,7 +254,7 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper Function ----------------
+# ---------------- AI Generation Engine ----------------
 def run_gemini_paper_generator(api_key_str, system_prompt, user_prompt):
     genai.configure(api_key=api_key_str)
     
@@ -288,8 +290,7 @@ def run_gemini_paper_generator(api_key_str, system_prompt, user_prompt):
     raise Exception(f"AI Generation Error: {last_err}")
 
 # ---------------- Exact CBSE 3-Column Table DOCX Formatter ----------------
-def set_cell_border(cell, **kwargs):
-    """Sets standard borders on Word table cells"""
+def set_cell_border(cell):
     tcPr = cell._tc.get_or_add_tcPr()
     tcBorders = parse_xml(
         r'<w:tcBorders %s>'
@@ -319,7 +320,7 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
         s.left_margin = Inches(0.6)
         s.right_margin = Inches(0.6)
 
-    # 1. School Logo & Header
+    # 1. School Header
     if logo_path and os.path.exists(logo_path):
         try:
             p_logo = doc.add_paragraph()
@@ -343,18 +344,25 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
     r2.bold = True
     r2.font.size = Pt(12)
 
-    # 2. Time & Marks Header
-    p_tm = doc.add_paragraph()
-    p_tm.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p_tm.paragraph_format.space_before = Pt(4)
-    p_tm.paragraph_format.space_after = Pt(4)
-    r_t = p_tm.add_run(f"Time Allowed: {time_allowed}")
-    r_t.bold = True
-    p_tm.add_run("\t\t\t\t\t\t\t")
-    r_m = p_tm.add_run(f"Maximum Marks: {total_marks}")
-    r_m.bold = True
+    # 2. Time & Marks Table
+    tbl = doc.add_table(rows=1, cols=2)
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tbl.autofit = False
+    tbl.columns[0].width = Inches(3.5)
+    tbl.columns[1].width = Inches(3.5)
 
-    # 3. General Instructions
+    c1 = tbl.cell(0, 0).paragraphs[0]
+    rc1 = c1.add_run(f"Time Allowed: {time_allowed}")
+    rc1.bold = True
+
+    c2 = tbl.cell(0, 1).paragraphs[0]
+    c2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    rc2 = c2.add_run(f"Maximum Marks: {total_marks}")
+    rc2.bold = True
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # 3. Separation of General Instructions & Questions
     lines = [l.strip() for l in raw_content.split("\n") if l.strip() and l.strip() != "---"]
     
     in_gi = True
@@ -369,7 +377,6 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
         else:
             question_lines.append(line)
 
-    # Print General Instructions
     for gl in gi_lines:
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(1)
@@ -383,14 +390,12 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
 
     doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-    # 4. Exact 3-Column CBSE Table
+    # 4. 3-Column CBSE Layout Table
     table = doc.add_table(rows=0, cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
-    
     col_widths = [Inches(0.8), Inches(5.4), Inches(0.8)]
 
-    # Process Question Blocks into Table Rows
     curr_q_no = ""
     curr_q_text = []
     curr_marks = ""
@@ -409,7 +414,7 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
         r = c0.add_run(q_no)
         r.bold = True
 
-        # Cell 1: Question content
+        # Cell 1: Content
         c1 = row.cells[1].paragraphs[0]
         c1.paragraph_format.space_before = Pt(1)
         c1.paragraph_format.space_after = Pt(1)
@@ -429,12 +434,10 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
         r_m.bold = True
 
     for ql in question_lines:
-        # Section Header Row
         if "SECTION" in ql.upper() and (ql.startswith("###") or ql.startswith("**") or len(ql) < 70):
             flush_question(curr_q_no, curr_q_text, curr_marks)
             curr_q_no, curr_q_text, curr_marks = "", [], ""
             
-            # Header Row across 3 columns
             sec_row = table.add_row()
             cell_merged = sec_row.cells[0]
             cell_merged.merge(sec_row.cells[1]).merge(sec_row.cells[2])
@@ -448,21 +451,17 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
             r.bold = True
             continue
 
-        # Detect Question start (e.g. "Q1.", "1.", "Q.1")
         m = re.match(r"^(Q\s*\.?\s*\d+|\d+)\.?\s*(.*)", ql)
         if m and not ql.startswith("(") and not ql.startswith("-"):
             flush_question(curr_q_no, curr_q_text, curr_marks)
             curr_q_no = m.group(1).replace("Q", "").replace(".", "").strip() + "."
-            
             rest_text = m.group(2).strip()
-            # Extract marks if at end (e.g. [1] or [2 Marks])
             m_marks = re.search(r"\[(\d+)\s*(?:Marks|Mark)?\]$", rest_text)
             if m_marks:
                 curr_marks = m_marks.group(1)
                 rest_text = rest_text[:m_marks.start()].strip()
             else:
                 curr_marks = "1"
-            
             curr_q_text = [rest_text] if rest_text else []
         else:
             if curr_q_no:
@@ -481,7 +480,7 @@ def export_cbse_sqp_docx(school_name, class_level, subject, total_marks, time_al
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
     if not api_key:
-        st.error("❌ Gemini API Key is missing! Enter it in the sidebar.")
+        st.error("❌ Application License key not configured. Please contact the administrator.")
     elif not syllabus.strip():
         st.error("❌ Please enter the syllabus or topics in the box above.")
     elif is_junior_class and not junior_blueprint:
@@ -492,7 +491,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
         try:
             with st.spinner(f"🧠 Generating authentic CBSE 3-Column Paper for {class_level} - {subject}..."):
                 system_prompt = (
-                    "You are a Senior CBSE Examination Paper Setter adhering strictly to CBSE SQP Session 2025-26 & 2026-27 blueprints. "
+                    "You are a Senior CBSE Examination Paper Setter adhering strictly to CBSE SQP blueprints. "
                     "CRITICAL: Do NOT write any thinking process or scratchpad. "
                     "Output ONLY the question paper text. Format every question starting with Q1., Q2., etc., followed by question text, options on separate lines, and marks at the end like [1] or [2]."
                 )
@@ -623,7 +622,7 @@ Format:
 
                 generated_paper_text = run_gemini_paper_generator(api_key, system_prompt, user_prompt)
 
-            # Export to DOCX with official 3-column table
+            # Export to DOCX
             filepath, filename = export_cbse_sqp_docx(
                 school_name=school_name,
                 class_level=class_level,
