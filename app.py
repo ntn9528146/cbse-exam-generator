@@ -253,6 +253,7 @@ st.markdown("---")
 
 
 # ---------------- AI Helper Function (Strict JSON Mode) ----------------
+# ---------------- AI Helper Function (Rock-Solid JSON Parser) ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
@@ -271,31 +272,25 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     last_err = None
     for m in active_models:
         try:
-            # Enforce structured JSON output directly from API
             model = genai.GenerativeModel(
                 model_name=m,
-                generation_config={"response_mime_type": "application/json"}
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0.2
+                }
             )
             response = model.generate_content(prompt_text)
             if response and response.text:
                 raw_text = response.text
                 break
-        except Exception:
-            # Fallback without response_mime_type if model doesn't support it
-            try:
-                model = genai.GenerativeModel(m)
-                response = model.generate_content(prompt_text)
-                if response and response.text:
-                    raw_text = response.text
-                    break
-            except Exception as e:
-                last_err = e
-                continue
+        except Exception as e:
+            last_err = e
+            continue
 
     if not raw_text:
         raise Exception(f"AI Generation Error: {last_err}")
 
-    # Strip markdown blocks
+    # Strip formatting tags
     clean_json = raw_text.strip()
     if clean_json.startswith("```json"):
         clean_json = clean_json[7:]
@@ -305,30 +300,15 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
         clean_json = clean_json[:-3]
     clean_json = clean_json.strip()
 
-    # 1. Standard JSON load
+    # Direct standard JSON parsing (ast.literal_eval ko bypass karein taaki leading zeros crash na karein)
     try:
         return json.loads(clean_json)
     except Exception:
-        pass
-
-    # 2. Python Dict / Single Quote fallback using ast.literal_eval
-    try:
-        data = ast.literal_eval(clean_json)
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-
-    # 3. Regex match fallback
-    match = re.search(r"\{.*\}", clean_json, re.DOTALL)
-    if match:
-        try:
+        # Regex search for the outermost JSON block
+        match = re.search(r"\{.*\}", clean_json, re.DOTALL)
+        if match:
             return json.loads(match.group(0))
-        except Exception:
-            return ast.literal_eval(match.group(0))
-
-    raise Exception("AI output parse nahi ho paya. Kripya button dobara click karein.")
-
+        raise Exception(f"JSON Parse Failed: {clean_json[:120]}")
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
     if not api_key:
