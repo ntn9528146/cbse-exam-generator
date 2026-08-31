@@ -2,10 +2,10 @@ import streamlit as st
 import json
 import os
 import re
+import ast
 from dotenv import load_dotenv
 import google.generativeai as genai
 from docx_generator import generate_and_save_docx
-import ast
 
 load_dotenv()
 
@@ -163,7 +163,7 @@ st.subheader("2. Question Paper Blueprint")
 junior_blueprint = {}
 
 if is_junior_class:
-    st.write("👉 **Select Question Types & Customize (At least 2 questions will be assigned per selected type):**")
+    st.write("👉 **Select Question Types & Customize:**")
     
     for q_type in JUNIOR_Q_TYPES:
         if f"chk_{q_type}" not in st.session_state:
@@ -249,11 +249,7 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper Function (Active Models & Robust JSON Parsing) ----------------
-
-
-# ---------------- AI Helper Function (Strict JSON Mode) ----------------
-# ---------------- AI Helper Function (Rock-Solid JSON Parser) ----------------
+# ---------------- AI Helper & Robust JSON Parser ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
@@ -270,6 +266,8 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
 
     raw_text = None
     last_err = None
+    
+    # 1. API Call with Structured JSON Enforced
     for m in active_models:
         try:
             model = genai.GenerativeModel(
@@ -283,32 +281,63 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
             if response and response.text:
                 raw_text = response.text
                 break
-        except Exception as e:
-            last_err = e
-            continue
+        except Exception:
+            try:
+                model = genai.GenerativeModel(m)
+                response = model.generate_content(prompt_text)
+                if response and response.text:
+                    raw_text = response.text
+                    break
+            except Exception as e:
+                last_err = e
+                continue
 
     if not raw_text:
         raise Exception(f"AI Generation Error: {last_err}")
 
-    # Strip formatting tags
-    clean_json = raw_text.strip()
-    if clean_json.startswith("```json"):
-        clean_json = clean_json[7:]
-    elif clean_json.startswith("```"):
-        clean_json = clean_json[3:]
-    if clean_json.endswith("```"):
-        clean_json = clean_json[:-3]
-    clean_json = clean_json.strip()
+    # 2. Multi-tier Robust Parser
+    clean_text = raw_text.strip()
+    if clean_text.startswith("```"):
+        clean_text = re.sub(r"^```[a-zA-Z]*\n?", "", clean_text)
+        clean_text = re.sub(r"\n?```$", "", clean_text)
+    clean_text = clean_text.strip()
 
-    # Direct standard JSON parsing (ast.literal_eval ko bypass karein taaki leading zeros crash na karein)
+    # Step A: Direct JSON load
     try:
-        return json.loads(clean_json)
+        return json.loads(clean_text)
     except Exception:
-        # Regex search for the outermost JSON block
-        match = re.search(r"\{.*\}", clean_json, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        raise Exception(f"JSON Parse Failed: {clean_json[:120]}")
+        pass
+
+    # Step B: Substring JSON block extraction
+    match = re.search(r"(\{.*\})", clean_text, re.DOTALL)
+    candidate = match.group(1) if match else clean_text
+
+    try:
+        return json.loads(candidate)
+    except Exception:
+        pass
+
+    # Step C: Safe Python Literal Eval handling numeric codes like 083, 065
+    try:
+        sanitized_ast = re.sub(r'(?<=[:,\s\[])(0\d+)(?=[,\s\]\}])', r'"\1"', candidate)
+        parsed_ast = ast.literal_eval(sanitized_ast)
+        if isinstance(parsed_ast, dict):
+            return parsed_ast
+    except Exception:
+        pass
+
+    # Step D: Single to Double Quote Conversion
+    try:
+        s = candidate.replace(": True", ": true").replace(": False", ": false").replace(": None", ": null")
+        s = s.replace("\\'", "__ESCAPED_QUOTE__")
+        s = re.sub(r"'([^']*)'", r'"\1"', s)
+        s = s.replace("__ESCAPED_QUOTE__", "'")
+        return json.loads(s)
+    except Exception:
+        pass
+
+    raise Exception("Output JSON format parse nahi ho paya. Kripya Generate button dobara click karein.")
+
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
     if not api_key:
@@ -339,7 +368,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                     - If Fill in blanks: Include '________'.
                     - If Match: Provide Column A and Column B.
 
-                    Return ONLY a valid JSON object matching:
+                    Output MUST be a JSON object with this exact schema (use standard double quotes):
                     {{
                       "general_instructions": [
                         "1. All questions are compulsory.",
@@ -374,7 +403,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         {pyq_mandate}
 
                         CBSE BLUEPRINT: Sec A (21 Qs x 1M), Sec B (7 Qs x 2M), Sec C (4 Qs x 3M), Sec D (2 Case Studies x 4M), Sec E (3 Qs x 5M).
-                        Return ONLY valid JSON matching standard sections and questions structure. No markdown ticks.
+                        Output MUST be a valid JSON object matching general_instructions and sections structure.
                         """
                     elif "402" in subject or "417" in subject:
                         prompt = f"""
@@ -384,7 +413,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         {pyq_mandate}
 
                         CBSE IT-402 BLUEPRINT: Section A Objective (24 Marks), Section B Subjective (26 Marks).
-                        Return ONLY valid JSON matching standard sections and questions structure. No markdown ticks.
+                        Output MUST be a valid JSON object matching general_instructions and sections structure.
                         """
                     else:
                         prompt = f"""
@@ -392,7 +421,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         Generate CBSE paper for syllabus: "{syllabus}"
                         Total Marks: {total_target_marks}, Time: {time_allowed}, Standard: {paper_standard}
                         {pyq_mandate}
-                        Sections A to E CBSE SQP format. Return ONLY valid JSON matching standard sections and questions structure. No markdown ticks.
+                        Sections A to E CBSE SQP format. Output MUST be a valid JSON object.
                         """
                     paper_data = run_gemini_json_prompt(api_key, prompt)
 
@@ -447,16 +476,27 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
             )
 
             for sec in sections_list:
-                st.markdown(f"### {sec.get('section_header')}")
+                st.markdown(f"### {sec.get('section_header', 'Section')}")
                 for gl in sec.get("guidelines", []):
                     st.caption(f"*{gl}*")
 
                 for q in sec.get("questions", []):
-                    q_num = q.get("q_no", "")
-                    q_h = q.get("instruction_header", "")
-                    q_t = q.get("question_text", "")
-                    q_m = q.get("marks_text", "")
-                    q_pyq = q.get("pyq_tag", "")
+                    if isinstance(q, dict):
+                        q_num = q.get("q_no", "")
+                        q_h = q.get("instruction_header", "")
+                        q_t = q.get("question_text", "")
+                        q_m = q.get("marks_text", "")
+                        q_pyq = q.get("pyq_tag", "")
+                        q_opts = q.get("options")
+                        sub_items = q.get("sub_items", [])
+                    else:
+                        q_num = ""
+                        q_h = ""
+                        q_t = str(q)
+                        q_m = ""
+                        q_pyq = ""
+                        q_opts = None
+                        sub_items = []
 
                     tag_display = f" <span style='color:#c53030; font-weight:bold;'>[{q_pyq}]</span>" if q_pyq else ""
 
@@ -465,21 +505,22 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                     if q_t:
                         st.markdown(f"**{q_num}** {q_t}{tag_display} `{q_m}`", unsafe_allow_html=True)
 
-                    if q.get("options") and isinstance(q["options"], dict):
-                        cols = st.columns(len(q["options"]))
-                        for o_idx, (k, val) in enumerate(q["options"].items()):
+                    if q_opts and isinstance(q_opts, dict):
+                        cols = st.columns(len(q_opts))
+                        for o_idx, (k, val) in enumerate(q_opts.items()):
                             with cols[o_idx]:
                                 st.write(f"**({k})** {val}")
 
-                    for idx, sub in enumerate(q.get("sub_items", []), 1):
-                        s_tag = f" <span style='color:#c53030; font-weight:bold;'>[{sub.get('pyq_tag')}]</span>" if sub.get('pyq_tag') else ""
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**({chr(104+idx)})** {sub.get('text')}{s_tag}", unsafe_allow_html=True)
-                        opts = sub.get("options")
-                        if opts and isinstance(opts, dict):
-                            cols = st.columns(len(opts))
-                            for o_idx, (k, val) in enumerate(opts.items()):
-                                with cols[o_idx]:
-                                    st.write(f"({k}) {val}")
+                    for idx, sub in enumerate(sub_items, 1):
+                        if isinstance(sub, dict):
+                            s_tag = f" <span style='color:#c53030; font-weight:bold;'>[{sub.get('pyq_tag')}]</span>" if sub.get('pyq_tag') else ""
+                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**({chr(104+idx)})** {sub.get('text', '')}{s_tag}", unsafe_allow_html=True)
+                            opts = sub.get("options")
+                            if opts and isinstance(opts, dict):
+                                cols = st.columns(len(opts))
+                                for o_idx, (k, val) in enumerate(opts.items()):
+                                    with cols[o_idx]:
+                                        st.write(f"({k}) {val}")
                 st.markdown("---")
 
         except Exception as err:
