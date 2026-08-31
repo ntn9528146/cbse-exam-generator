@@ -248,30 +248,53 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper Function (Active Models) ----------------
-# ------------ AI Helper Function ------------
+# ---------------- AI Helper Function (Active Models & Robust JSON Parsing) ----------------
 def run_gemini_json_prompt(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
-    # 2026 ke strictly active current models
-    models_to_test = [
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3-flash"
-    ]
-    
+    active_models = []
+    try:
+        for m in genai.list_models():
+            if "generateContent" in m.supported_generation_methods:
+                active_models.append(m.name)
+    except Exception:
+        pass
+
+    if not active_models:
+        active_models = ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-1.5-pro"]
+
+    raw_text = None
     last_err = None
-    for m in models_to_test:
+    for m in active_models:
         try:
             model = genai.GenerativeModel(m)
             response = model.generate_content(prompt_text)
             if response and response.text:
-                return response.text
+                raw_text = response.text
+                break
         except Exception as e:
             last_err = e
             continue
-            
-    raise Exception(f"AI Generation Error: {last_err}")
+
+    if not raw_text:
+        raise Exception(f"AI Generation Error: {last_err}")
+
+    clean_json = raw_text.strip()
+    if clean_json.startswith("```json"):
+        clean_json = clean_json[7:]
+    elif clean_json.startswith("```"):
+        clean_json = clean_json[3:]
+    if clean_json.endswith("```"):
+        clean_json = clean_json[:-3]
+    clean_json = clean_json.strip()
+
+    try:
+        return json.loads(clean_json)
+    except Exception:
+        match = re.search(r"\{.*\}", clean_json, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise Exception(f"AI generated text format is not valid JSON. Response start: {clean_json[:120]}")
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
@@ -338,7 +361,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         {pyq_mandate}
 
                         CBSE BLUEPRINT: Sec A (21 Qs x 1M), Sec B (7 Qs x 2M), Sec C (4 Qs x 3M), Sec D (2 Case Studies x 4M), Sec E (3 Qs x 5M).
-                        Return ONLY valid JSON with no markdown formatting.
+                        Return ONLY valid JSON matching standard sections and questions structure. No markdown ticks.
                         """
                     elif "402" in subject or "417" in subject:
                         prompt = f"""
@@ -348,7 +371,7 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         {pyq_mandate}
 
                         CBSE IT-402 BLUEPRINT: Section A Objective (24 Marks), Section B Subjective (26 Marks).
-                        Return ONLY valid JSON with no markdown formatting.
+                        Return ONLY valid JSON matching standard sections and questions structure. No markdown ticks.
                         """
                     else:
                         prompt = f"""
@@ -356,9 +379,12 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         Generate CBSE paper for syllabus: "{syllabus}"
                         Total Marks: {total_target_marks}, Time: {time_allowed}, Standard: {paper_standard}
                         {pyq_mandate}
-                        Sections A to E CBSE SQP format. Return ONLY valid JSON with no markdown formatting.
+                        Sections A to E CBSE SQP format. Return ONLY valid JSON matching standard sections and questions structure. No markdown ticks.
                         """
                     paper_data = run_gemini_json_prompt(api_key, prompt)
+
+            if not isinstance(paper_data, dict):
+                paper_data = {}
 
             gen_instructions = paper_data.get("general_instructions", [])
             sections_list = paper_data.get("sections", [])
