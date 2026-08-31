@@ -1,11 +1,11 @@
 import streamlit as st
-import json
 import os
 import re
-import ast
 from dotenv import load_dotenv
 import google.generativeai as genai
-from docx_generator import generate_and_save_docx
+from docx import Document
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 load_dotenv()
 
@@ -249,11 +249,10 @@ else:
 
 st.markdown("---")
 
-# ---------------- AI Helper & Bulletproof JSON Parser ----------------
-def run_gemini_json_prompt(api_key_str, prompt_text):
+# ---------------- Direct AI Generator (No JSON Parsing Failures) ----------------
+def run_gemini_text_generator(api_key_str, prompt_text):
     genai.configure(api_key=api_key_str)
     
-    # 1. Dynamically get models with generateContent support
     active_models = []
     try:
         for m in genai.list_models():
@@ -265,89 +264,93 @@ def run_gemini_json_prompt(api_key_str, prompt_text):
     if not active_models:
         active_models = ["models/gemini-2.0-flash", "models/gemini-1.5-flash", "models/gemini-1.5-pro"]
 
-    raw_text = None
     last_err = None
-    
-    # 2. API Call with large output token limit and JSON enforcement
     for m in active_models:
         try:
             model = genai.GenerativeModel(
                 model_name=m,
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0.2,
-                    "max_output_tokens": 8192
-                }
+                generation_config={"temperature": 0.3, "max_output_tokens": 8192}
             )
             response = model.generate_content(prompt_text)
             if response and response.text:
-                raw_text = response.text
-                break
+                return response.text
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise Exception(f"AI Generation Error: {last_err}")
+
+def export_text_to_docx(school_name, class_level, subject, total_marks, time_allowed, raw_content, logo_path=None):
+    doc = Document()
+    for s in doc.sections:
+        s.top_margin = Inches(0.6)
+        s.bottom_margin = Inches(0.6)
+        s.left_margin = Inches(0.75)
+        s.right_margin = Inches(0.75)
+
+    if logo_path and os.path.exists(logo_path):
+        try:
+            p_logo = doc.add_paragraph()
+            p_logo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_logo.add_run().add_picture(logo_path, width=Inches(1.0))
         except Exception:
-            try:
-                model = genai.GenerativeModel(
-                    model_name=m,
-                    generation_config={"max_output_tokens": 8192}
-                )
-                response = model.generate_content(prompt_text)
-                if response and response.text:
-                    raw_text = response.text
-                    break
-            except Exception as e:
-                last_err = e
-                continue
+            pass
 
-    if not raw_text:
-        raise Exception(f"AI Generation Error: {last_err}")
+    # School Header
+    p_title = doc.add_paragraph()
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r1 = p_title.add_run(school_name.upper())
+    r1.bold = True
+    r1.font.size = Pt(16)
 
-    # 3. Clean and parse JSON
-    clean_text = raw_text.strip()
-    if clean_text.startswith("```"):
-        clean_text = re.sub(r"^```[a-zA-Z]*\n?", "", clean_text)
-        clean_text = re.sub(r"\n?```$", "", clean_text)
-    clean_text = clean_text.strip()
+    p_sub = doc.add_paragraph()
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r2 = p_sub.add_run(f"EXAMINATION (SESSION 2026-2027)\n{class_level.upper()} — {subject.upper()}")
+    r2.bold = True
+    r2.font.size = Pt(12)
 
-    # Step A: Direct JSON load
-    try:
-        return json.loads(clean_text)
-    except Exception:
-        pass
+    # Info Table
+    tbl = doc.add_table(rows=1, cols=2)
+    tbl.autofit = False
+    tbl.columns[0].width = Inches(3.5)
+    tbl.columns[1].width = Inches(3.5)
+    tbl.cell(0, 0).paragraphs[0].text = f"Time Allowed: {time_allowed}"
+    pr = tbl.cell(0, 1).paragraphs[0]
+    pr.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    pr.text = f"Maximum Marks: {total_marks}"
 
-    # Step B: Auto-close unclosed brackets if truncated
-    candidate = clean_text
-    match = re.search(r"(\{.*\})", clean_text, re.DOTALL)
-    if match:
-        candidate = match.group(1)
-    else:
-        open_b = candidate.count("{") - candidate.count("}")
-        open_sq = candidate.count("[") - candidate.count("]")
-        candidate = candidate + ("]" * max(0, open_sq)) + ("}" * max(0, open_b))
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
-    try:
-        return json.loads(candidate)
-    except Exception:
-        pass
+    # Append question text line by line
+    for line in raw_content.split("\n"):
+        line_s = line.strip()
+        if not line_s:
+            continue
+        
+        p = doc.add_paragraph()
+        if line_s.startswith("### ") or line_s.startswith("## ") or "SECTION" in line_s.upper():
+            r = p.add_run(line_s.replace("###", "").replace("##", "").strip())
+            r.bold = True
+            r.font.size = Pt(11.5)
+            p.paragraph_format.space_before = Pt(8)
+            p.paragraph_format.space_after = Pt(3)
+        elif line_s.startswith("Q") or re.match(r"^\d+\.", line_s):
+            r = p.add_run(line_s)
+            r.bold = True
+            p.paragraph_format.space_before = Pt(4)
+        elif line_s.startswith("(") or line_s.startswith("- "):
+            p.paragraph_format.left_indent = Inches(0.3)
+            p.add_run(line_s)
+        else:
+            p.add_run(line_s)
 
-    # Step C: Safe AST literal eval (handles leading zero integers like 083, 065)
-    try:
-        sanitized_ast = re.sub(r'(?<=[:,\s\[])(0\d+)(?=[,\s\]\}])', r'"\1"', candidate)
-        parsed_ast = ast.literal_eval(sanitized_ast)
-        if isinstance(parsed_ast, dict):
-            return parsed_ast
-    except Exception:
-        pass
-
-    # Step D: Single to Double Quote Conversion
-    try:
-        s = candidate.replace(": True", ": true").replace(": False", ": false").replace(": None", ": null")
-        s = s.replace("\\'", "__ESCAPED_QUOTE__")
-        s = re.sub(r"'([^']*)'", r'"\1"', s)
-        s = s.replace("__ESCAPED_QUOTE__", "'")
-        return json.loads(s)
-    except Exception:
-        pass
-
-    raise Exception("Output JSON parse nahi ho paya. Kripya Generate button dobara dabayein.")
+    os.makedirs("generated_papers", exist_ok=True)
+    clean_sub = re.sub(r'[^a-zA-Z0-9_]', '_', subject)
+    clean_cls = re.sub(r'[^a-zA-Z0-9_]', '_', class_level)
+    fname = f"{clean_cls}_{clean_sub}_Exam_Paper.docx"
+    fpath = os.path.join("generated_papers", fname)
+    doc.save(fpath)
+    return fpath, fname
 
 # ---------------- Action Button ----------------
 if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", use_container_width=True):
@@ -361,96 +364,82 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
         st.error(f"❌ Junior Blueprint Total ({current_calculated}) must match Target Total Marks ({total_target_marks}). Use Auto-Distribute button.")
     else:
         try:
-            with st.spinner(f"🧠 Generating examination paper for {class_level} - {subject}..."):
+            with st.spinner(f"🧠 Generating authentic examination paper for {class_level} - {subject}..."):
                 if is_junior_class:
-                    bp_lines = [f"- Section '{k}': Exactly {v['count']} questions ({v['marks']} Marks each)" for k, v in junior_blueprint.items()]
-                    bp_text = "\n".join(bp_lines)
+                    bp_text = "\n".join([f"- Section '{k}': Exactly {v['count']} questions ({v['marks']} Marks each)" for k, v in junior_blueprint.items()])
                     prompt = f"""
-                    You are an expert school examination setter for {class_level}, Subject: {subject}.
+                    You are a Senior CBSE Examination Paper Setter for {class_level}, Subject: {subject}.
+                    Create a complete, ready-to-print question paper.
                     Syllabus: "{syllabus}"
                     Standard: {paper_standard} | Total Marks: {total_target_marks} | Time: {time_allowed}
 
-                    Required Sections & Questions:
+                    Blueprint & Sections:
                     {bp_text}
 
-                    Strict Rules:
-                    - Every question must be 100% unique and distinct.
-                    - If MCQ: Provide 4 options labeled a, b, c, d.
-                    - If Fill in blanks: Include '________'.
-                    - If Match: Provide Column A and Column B.
-
-                    Output MUST be a valid JSON object matching this structure (use standard double quotes):
-                    {{
-                      "general_instructions": [
-                        "1. All questions are compulsory.",
-                        "2. Read questions carefully."
-                      ],
-                      "sections": [
-                        {{
-                          "section_header": "SECTION NAME",
-                          "guidelines": ["Marks details"],
-                          "questions": [
-                            {{
-                              "q_no": "Q1.",
-                              "question_text": "Question statement...",
-                              "marks_text": "[1 Mark]",
-                              "options": {{"a": "Opt 1", "b": "Opt 2", "c": "Opt 3", "d": "Opt 4"}}
-                            }}
-                          ]
-                        }}
-                      ]
-                    }}
+                    Instructions:
+                    - Include General Instructions at the top.
+                    - Format every section clearly: ### SECTION A: [NAME] ([Marks] Marks Each)
+                    - Number every question clearly: Q1., Q2., etc. with marks at the end like [1 Mark].
+                    - For MCQs, give clean options: (a) ..., (b) ..., (c) ..., (d) ...
                     """
-                    paper_data = run_gemini_json_prompt(api_key, prompt)
                 else:
                     is_pyq = "PYQ" in paper_standard
-                    pyq_mandate = "For every question, provide authentic CBSE Board source in 'pyq_tag' (e.g. 'CBSE 2024 Delhi Set-1')." if is_pyq else ""
+                    pyq_tag = "Include real CBSE PYQ tags like [CBSE 2024] at the end of questions." if is_pyq else ""
                     
-                    if "065" in subject or "083" in subject:
+                    if "402" in subject or "417" in subject:
                         prompt = f"""
-                        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
-                        Generate full 37-Question CBSE Paper for syllabus: "{syllabus}"
-                        Total Marks: 70 | Time: 3 Hours | Standard: {paper_standard}
-                        {pyq_mandate}
+                        You are an Official CBSE Board Paper Setter for {class_level}, Subject: {subject}.
+                        Create a complete official 21-Question examination paper for Syllabus: "{syllabus}".
+                        Total Marks: 50 | Time Allowed: 2 Hours | Standard: {paper_standard}
+                        {pyq_tag}
 
-                        CBSE BLUEPRINT: Sec A (21 Qs x 1M), Sec B (7 Qs x 2M), Sec C (4 Qs x 3M), Sec D (2 Case Studies x 4M), Sec E (3 Qs x 5M).
-                        Output MUST be a valid JSON object matching general_instructions and sections structure.
+                        STRUCTURE:
+                        - General Instructions
+                        - ### SECTION A: OBJECTIVE TYPE QUESTIONS (24 Marks)
+                          Include Q1 to Q5 with sub-parts (Employability Skills & Subject Specific Skills MCQs, 1 Mark each).
+                        - ### SECTION B: SUBJECTIVE TYPE QUESTIONS (26 Marks)
+                          Include Short Answer (2 Marks) and Long Answer (4 Marks) questions.
+
+                        Format:
+                        - Format every question clearly (e.g. Q1. Question text... [1 Mark])
+                        - Format MCQs with options (a), (b), (c), (d) on separate lines.
                         """
-                    elif "402" in subject or "417" in subject:
+                    elif "065" in subject or "083" in subject:
                         prompt = f"""
-                        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
-                        Generate 21-Question CBSE paper for syllabus: "{syllabus}"
-                        Total Marks: 50 | Time: 2 Hours | Standard: {paper_standard}
-                        {pyq_mandate}
+                        You are an Official CBSE Board Paper Setter for {class_level}, Subject: {subject}.
+                        Create full 37-Question paper for Syllabus: "{syllabus}".
+                        Total Marks: 70 | Time: 3 Hours | Standard: {paper_standard}
+                        {pyq_tag}
 
-                        CBSE IT-402 BLUEPRINT: Section A Objective (24 Marks), Section B Subjective (26 Marks).
-                        Output MUST be a valid JSON object matching general_instructions and sections structure.
+                        STRUCTURE:
+                        - General Instructions
+                        - ### SECTION A (21 Questions x 1 Mark) - MCQs & Assertion Reason
+                        - ### SECTION B (7 Questions x 2 Marks) - Short Answer
+                        - ### SECTION C (4 Questions x 3 Marks) - Short Answer Type II
+                        - ### SECTION D (2 Questions x 4 Marks) - Case Studies
+                        - ### SECTION E (3 Questions x 5 Marks) - Long Answer Type
+
+                        Format every question clearly (e.g. Q1. ... [1 Mark]).
                         """
                     else:
                         prompt = f"""
-                        You are an official CBSE Board Examination Paper Setter for {class_level}, Subject: {subject}.
-                        Generate CBSE paper for syllabus: "{syllabus}"
-                        Total Marks: {total_target_marks}, Time: {time_allowed}, Standard: {paper_standard}
-                        {pyq_mandate}
-                        Sections A to E CBSE SQP format. Output MUST be a valid JSON object.
+                        You are an Official CBSE Board Paper Setter for {class_level}, Subject: {subject}.
+                        Create complete CBSE paper for Syllabus: "{syllabus}".
+                        Total Marks: {total_target_marks} | Time: {time_allowed} | Standard: {paper_standard}
+                        {pyq_tag}
+                        Format with General Instructions and Sections A to E with clear question numbers (Q1., Q2., etc.).
                         """
-                    paper_data = run_gemini_json_prompt(api_key, prompt)
 
-            if not isinstance(paper_data, dict):
-                paper_data = {}
+                generated_paper_text = run_gemini_text_generator(api_key, prompt)
 
-            gen_instructions = paper_data.get("general_instructions", [])
-            sections_list = paper_data.get("sections", [])
-
-            filepath, filename = generate_and_save_docx(
+            # Export to DOCX
+            filepath, filename = export_text_to_docx(
                 school_name=school_name,
                 class_level=class_level,
                 subject=subject,
                 total_marks=total_target_marks,
                 time_allowed=time_allowed,
-                syllabus=syllabus,
-                sections_list=sections_list,
-                general_instructions=gen_instructions,
+                raw_content=generated_paper_text,
                 logo_path=logo_temp_path
             )
 
@@ -477,62 +466,12 @@ if st.button("🚀 Generate Examination Paper & Export DOCX", type="primary", us
                         <p style="margin: 5px 0; font-size: 14px;"><b>Maximum Marks:</b> {total_target_marks} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Time Allowed:</b> {time_allowed.upper()}</p>
                     </div>
                     <hr style="margin: 15px 0;">
-                    <p style="margin: 0; font-size: 15px; font-weight: bold;">General Instructions:</p>
-                    <ul style="margin-top: 5px; font-size: 14px; padding-left: 20px;">
-                        {''.join(f'<li>{inst}</li>' for inst in gen_instructions)}
-                    </ul>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
 
-            for sec in sections_list:
-                st.markdown(f"### {sec.get('section_header', 'Section')}")
-                for gl in sec.get("guidelines", []):
-                    st.caption(f"*{gl}*")
-
-                for q in sec.get("questions", []):
-                    if isinstance(q, dict):
-                        q_num = q.get("q_no", "")
-                        q_h = q.get("instruction_header", "")
-                        q_t = q.get("question_text", "")
-                        q_m = q.get("marks_text", "")
-                        q_pyq = q.get("pyq_tag", "")
-                        q_opts = q.get("options")
-                        sub_items = q.get("sub_items", [])
-                    else:
-                        q_num = ""
-                        q_h = ""
-                        q_t = str(q)
-                        q_m = ""
-                        q_pyq = ""
-                        q_opts = None
-                        sub_items = []
-
-                    tag_display = f" <span style='color:#c53030; font-weight:bold;'>[{q_pyq}]</span>" if q_pyq else ""
-
-                    if q_h:
-                        st.markdown(f"**{q_num} {q_h}** `{q_m}`")
-                    if q_t:
-                        st.markdown(f"**{q_num}** {q_t}{tag_display} `{q_m}`", unsafe_allow_html=True)
-
-                    if q_opts and isinstance(q_opts, dict):
-                        cols = st.columns(len(q_opts))
-                        for o_idx, (k, val) in enumerate(q_opts.items()):
-                            with cols[o_idx]:
-                                st.write(f"**({k})** {val}")
-
-                    for idx, sub in enumerate(sub_items, 1):
-                        if isinstance(sub, dict):
-                            s_tag = f" <span style='color:#c53030; font-weight:bold;'>[{sub.get('pyq_tag')}]</span>" if sub.get('pyq_tag') else ""
-                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**({chr(104+idx)})** {sub.get('text', '')}{s_tag}", unsafe_allow_html=True)
-                            opts = sub.get("options")
-                            if opts and isinstance(opts, dict):
-                                cols = st.columns(len(opts))
-                                for o_idx, (k, val) in enumerate(opts.items()):
-                                    with cols[o_idx]:
-                                        st.write(f"({k}) {val}")
-                st.markdown("---")
+            st.markdown(generated_paper_text)
 
         except Exception as err:
             st.error(f"Error: {str(err)}")
